@@ -333,16 +333,19 @@ class ChatWidget(QWidget):
                         import base64
                         response = httpx.get(url, timeout=10.0)
                         if response.status_code == 200:
-                            img_data = base64.b64encode(response.content).decode('utf-8')
-                            content_type = response.headers.get('content-type', 'image/png')
-                            data_url = f"data:{content_type};base64,{img_data}"
-                            html += f'<p><a href="{url}"><img src="{data_url}" width="400" style="max-width: 100%; border: 1px solid #ccc; margin: 5px 0;"/></a>'
-                            html += f'<br/><small style="color: #666;">{img_type}</small></p>'
+                            content_type = response.headers.get('content-type', '')
+                            if content_type.startswith('image/'):
+                                img_data = base64.b64encode(response.content).decode('utf-8')
+                                data_url = f"data:{content_type};base64,{img_data}"
+                                html += f'<p><a href="{url}"><img src="{data_url}" width="400" style="max-width: 100%; border: 1px solid #ccc; margin: 5px 0;"/></a>'
+                                html += f'<br/><small style="color: #666;">{img_type}</small></p>'
+                            else:
+                                html += f'<p><a href="{url}">[Файл: {img_type}]</a></p>'
                         else:
-                            html += f'<p><a href="{url}">[Изображение: {img_type}]</a></p>'
+                            html += f'<p><a href="{url}">[Файл: {img_type}]</a></p>'
                     except Exception as e:
                         logger.error(f"Error loading image: {e}")
-                        html += f'<p><a href="{url}">[Изображение: {img_type}]</a></p>'
+                        html += f'<p><a href="{url}">[Файл: {img_type}]</a></p>'
             html += '</div>'
         
         cursor.insertHtml(html)
