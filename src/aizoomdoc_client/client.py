@@ -260,7 +260,9 @@ class AIZoomDocClient:
         self,
         chat_id: UUID,
         message: str,
-        attached_file_ids: Optional[List[UUID]] = None
+        attached_file_ids: Optional[List[UUID]] = None,
+        attached_document_ids: Optional[List[UUID]] = None,
+        client_id: Optional[str] = None
     ) -> Iterator[StreamEvent]:
         """
         Отправить сообщение в чат со стримингом ответа.
@@ -285,21 +287,32 @@ class AIZoomDocClient:
         data = {"content": message}
         if attached_file_ids:
             data["attached_file_ids"] = [str(fid) for fid in attached_file_ids]
+        if attached_document_ids:
+            data["attached_document_ids"] = [str(did) for did in attached_document_ids]
         
         # Отправляем сообщение
         response = self._http.post(f"/chats/{chat_id}/messages", json=data)
         
         # Стримим события
+        params = {}
+        if client_id:
+            params["client_id"] = client_id
+        if attached_document_ids:
+            params["document_ids"] = [str(did) for did in attached_document_ids]
+
         yield from self._http.stream_sse(
             f"/chats/{chat_id}/stream",
-            method="GET"
+            method="GET",
+            params=params
         )
     
     def send_message_sync(
         self,
         chat_id: UUID,
         message: str,
-        attached_file_ids: Optional[List[UUID]] = None
+        attached_file_ids: Optional[List[UUID]] = None,
+        attached_document_ids: Optional[List[UUID]] = None,
+        client_id: Optional[str] = None
     ) -> MessageResponse:
         """
         Отправить сообщение и дождаться полного ответа (без стриминга).
@@ -315,12 +328,20 @@ class AIZoomDocClient:
         data = {"content": message}
         if attached_file_ids:
             data["attached_file_ids"] = [str(fid) for fid in attached_file_ids]
+        if attached_document_ids:
+            data["attached_document_ids"] = [str(did) for did in attached_document_ids]
         
         response = self._http.post(f"/chats/{chat_id}/messages", json=data)
         
         # Собираем полный ответ из стриминга
         full_response = ""
-        for event in self._http.stream_sse(f"/chats/{chat_id}/stream"):
+        params = {}
+        if client_id:
+            params["client_id"] = client_id
+        if attached_document_ids:
+            params["document_ids"] = [str(did) for did in attached_document_ids]
+
+        for event in self._http.stream_sse(f"/chats/{chat_id}/stream", params=params):
             if event.event == "llm_token":
                 full_response += event.data.get("token", "")
             elif event.event == "llm_final":

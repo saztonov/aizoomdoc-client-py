@@ -62,11 +62,20 @@ class StreamWorker(QThread):
     error_occurred = pyqtSignal(str)
     completed = pyqtSignal()
     
-    def __init__(self, client: AIZoomDocClient, chat_id: str, message: str):
+    def __init__(
+        self,
+        client: AIZoomDocClient,
+        chat_id: str,
+        message: str,
+        document_ids: Optional[List[str]] = None,
+        client_id: Optional[str] = None
+    ):
         super().__init__()
         self.client = client
         self.chat_id = chat_id
         self.message = message
+        self.document_ids = document_ids or []
+        self.client_id = client_id
         self._stop_requested = False
     
     def run(self):
@@ -74,7 +83,14 @@ class StreamWorker(QThread):
             from uuid import UUID
             chat_uuid = UUID(self.chat_id)
             
-            for event in self.client.send_message(chat_uuid, self.message):
+            from uuid import UUID
+            doc_ids = [UUID(did) for did in self.document_ids] if self.document_ids else None
+            for event in self.client.send_message(
+                chat_uuid,
+                self.message,
+                attached_document_ids=doc_ids,
+                client_id=self.client_id
+            ):
                 if self._stop_requested:
                     break
                 
@@ -236,6 +252,7 @@ class ChatWidget(QWidget):
         self.client: Optional[AIZoomDocClient] = None
         self.current_chat_id: Optional[str] = None
         self.worker: Optional[StreamWorker] = None
+        self.attachments_provider = None
         self._setup_ui()
     
     def _setup_ui(self):
@@ -354,7 +371,26 @@ class ChatWidget(QWidget):
         cursor.insertHtml('<p style="color: #009933; margin: 10px 0;"><b>Ассистент:</b></p><p style="margin: 5px 0 15px 20px;">')
         self.messages_area.setTextCursor(cursor)
         
-        self.worker = StreamWorker(self.client, self.current_chat_id, message)
+        document_ids = []
+        client_id = None
+        if callable(self.attachments_provider):
+            ctx = self.attachments_provider() or {}
+            document_ids = ctx.get("document_ids", [])
+            client_id = ctx.get("client_id")
+
+        if not client_id:
+            QMessageBox.warning(self, "Ошибка", "Не указан Client ID (вкладка Дерево)")
+            self.send_btn.setEnabled(True)
+            self.status_label.setText("")
+            return
+
+        self.worker = StreamWorker(
+            self.client,
+            self.current_chat_id,
+            message,
+            document_ids=document_ids,
+            client_id=client_id
+        )
         self.worker.token_received.connect(self._on_token)
         self.worker.phase_started.connect(self._on_phase)
         self.worker.error_occurred.connect(self._on_error)
@@ -455,6 +491,9 @@ class LeftPanel(QWidget):
         client_layout.addWidget(self.client_id_edit)
         tree_layout.addLayout(client_layout)
         
+        self.selected_docs_label = QLabel("Выбрано документов: 0")
+        tree_layout.addWidget(self.selected_docs_label)
+
         self.refresh_tree_btn = QPushButton("Загрузить дерево")
         self.refresh_tree_btn.clicked.connect(self._load_tree)
         tree_layout.addWidget(self.refresh_tree_btn)
@@ -462,6 +501,8 @@ class LeftPanel(QWidget):
         self.tree_widget = QTreeWidget()
         self.tree_widget.setHeaderLabels(["Название", "Тип"])
         self.tree_widget.setColumnWidth(0, 200)
+        self.tree_widget.setSelectionMode(QTreeWidget.SelectionMode.ExtendedSelection)
+        self.tree_widget.itemSelectionChanged.connect(self._update_selected_docs)
         tree_layout.addWidget(self.tree_widget, 1)
         
         self.stack.addWidget(tree_page)
@@ -539,10 +580,28 @@ class LeftPanel(QWidget):
         item.setText(0, name)
         item.setText(1, node_type)
         item.setData(0, Qt.ItemDataRole.UserRole, node.get("id"))
+        item.setData(0, Qt.ItemDataRole.UserRole + 1, node_type)
         
         children = node.get("children", [])
         for child in children:
             self._add_tree_node(item, child)
+
+    def _update_selected_docs(self):
+        doc_ids = self.get_selected_document_ids()
+        self.selected_docs_label.setText(f"Выбрано документов: {len(doc_ids)}")
+
+    def get_selected_document_ids(self) -> List[str]:
+        selected = []
+        for item in self.tree_widget.selectedItems():
+            node_type = item.data(0, Qt.ItemDataRole.UserRole + 1)
+            if node_type == "document":
+                doc_id = item.data(0, Qt.ItemDataRole.UserRole)
+                if doc_id:
+                    selected.append(str(doc_id))
+        return selected
+
+    def get_client_id(self) -> str:
+        return self.client_id_edit.text().strip()
 
 
 class MainWindow(QMainWindow):
@@ -609,6 +668,7 @@ class MainWindow(QMainWindow):
         
         # Chat widget
         self.chat_widget = ChatWidget()
+        self.chat_widget.attachments_provider = self._get_message_context
         splitter.addWidget(self.chat_widget)
         
         splitter.setSizes([300, 900])
@@ -709,6 +769,15 @@ class MainWindow(QMainWindow):
     
     def _on_chat_selected(self, chat_id: str):
         self.chat_widget.set_chat(chat_id)
+
+    def _get_message_context(self) -> dict:
+        """Получить client_id и выбранные документы для сообщения."""
+        if not self.left_panel:
+            return {}
+        return {
+            "client_id": self.left_panel.get_client_id(),
+            "document_ids": self.left_panel.get_selected_document_ids()
+        }
     
     def _create_new_chat(self):
         if not self.client:
