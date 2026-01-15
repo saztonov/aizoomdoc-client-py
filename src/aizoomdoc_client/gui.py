@@ -283,11 +283,12 @@ class ChatWidget(QWidget):
             self.messages_area.clear()
             for msg in history.messages:
                 content = fix_mojibake(msg.content)
-                self._append_message(msg.role, content)
+                images = getattr(msg, 'images', [])
+                self._append_message(msg.role, content, images)
         except Exception as e:
             logger.error(f"Error loading history: {e}")
     
-    def _append_message(self, role: str, content: str):
+    def _append_message(self, role: str, content: str, images: list = None):
         cursor = self.messages_area.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.End)
         
@@ -300,6 +301,15 @@ class ChatWidget(QWidget):
             html += f'<p style="margin: 5px 0 15px 20px;">{formatted}</p>'
         else:
             html = f'<p style="color: #666;">{content}</p>'
+        
+        # Добавляем изображения
+        if images:
+            for img in images:
+                url = getattr(img, 'url', None) or (img.get('url') if isinstance(img, dict) else None)
+                if url:
+                    img_type = getattr(img, 'image_type', '') or (img.get('image_type', '') if isinstance(img, dict) else '')
+                    html += f'<p style="margin: 5px 20px;"><a href="{url}">[Изображение: {img_type}]</a></p>'
+                    # Для отображения превью можно использовать: <img src="{url}" width="300"/>
         
         cursor.insertHtml(html)
         self.messages_area.setTextCursor(cursor)

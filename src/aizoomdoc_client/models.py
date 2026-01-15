@@ -75,6 +75,17 @@ class ChatResponse(BaseModel):
     updated_at: datetime
 
 
+class MessageImage(BaseModel):
+    """Изображение в сообщении."""
+    id: UUID
+    file_id: Optional[UUID] = None
+    image_type: Optional[str] = None
+    description: Optional[str] = None
+    width: Optional[int] = None
+    height: Optional[int] = None
+    url: Optional[str] = None
+
+
 class MessageResponse(BaseModel):
     """Ответ с сообщением."""
     id: UUID
@@ -83,6 +94,7 @@ class MessageResponse(BaseModel):
     content: str
     message_type: str = "text"
     created_at: datetime
+    images: List[MessageImage] = []
 
 
 class ChatHistoryResponse(BaseModel):
