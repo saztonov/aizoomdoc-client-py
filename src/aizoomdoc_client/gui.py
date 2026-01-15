@@ -24,8 +24,9 @@ from PyQt6.QtWidgets import (
     QGroupBox, QSizePolicy, QTabWidget, QTextBrowser, QStackedWidget,
     QStatusBar, QToolBar, QTreeWidget, QTreeWidgetItem, QButtonGroup
 )
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QSize, QTimer
-from PyQt6.QtGui import QFont, QAction, QTextCursor, QIcon, QColor
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QSize, QTimer, QUrl, QByteArray
+from PyQt6.QtGui import QFont, QAction, QTextCursor, QIcon, QColor, QPixmap, QImage
+from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkRequest, QNetworkReply
 
 from aizoomdoc_client.client import AIZoomDocClient
 from aizoomdoc_client.config import get_config_manager
@@ -304,12 +305,28 @@ class ChatWidget(QWidget):
         
         # Добавляем изображения
         if images:
+            html += '<div style="margin: 10px 20px;">'
             for img in images:
                 url = getattr(img, 'url', None) or (img.get('url') if isinstance(img, dict) else None)
                 if url:
                     img_type = getattr(img, 'image_type', '') or (img.get('image_type', '') if isinstance(img, dict) else '')
-                    html += f'<p style="margin: 5px 20px;"><a href="{url}">[Изображение: {img_type}]</a></p>'
-                    # Для отображения превью можно использовать: <img src="{url}" width="300"/>
+                    # Загружаем изображение и конвертируем в base64
+                    try:
+                        import httpx
+                        import base64
+                        response = httpx.get(url, timeout=10.0)
+                        if response.status_code == 200:
+                            img_data = base64.b64encode(response.content).decode('utf-8')
+                            content_type = response.headers.get('content-type', 'image/png')
+                            data_url = f"data:{content_type};base64,{img_data}"
+                            html += f'<p><a href="{url}"><img src="{data_url}" width="400" style="max-width: 100%; border: 1px solid #ccc; margin: 5px 0;"/></a>'
+                            html += f'<br/><small style="color: #666;">{img_type}</small></p>'
+                        else:
+                            html += f'<p><a href="{url}">[Изображение: {img_type}]</a></p>'
+                    except Exception as e:
+                        logger.error(f"Error loading image: {e}")
+                        html += f'<p><a href="{url}">[Изображение: {img_type}]</a></p>'
+            html += '</div>'
         
         cursor.insertHtml(html)
         self.messages_area.setTextCursor(cursor)
