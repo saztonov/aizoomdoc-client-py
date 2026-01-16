@@ -87,14 +87,18 @@ class StreamWorker(QThread):
             chat_uuid = UUID(self.chat_id)
             
             # Upload local files to Google File API first
-            google_file_uris = []
+            google_files = []
             for file_path in self.local_files:
                 if self._stop_requested:
                     break
                 try:
                     self.phase_started.emit("upload", f"Загрузка {file_path}...")
                     result = self.client.upload_file_for_llm(file_path)
-                    google_file_uris.append(result.google_file_uri)
+                    # Передаём и URI, и mime_type
+                    google_files.append({
+                        "uri": result.google_file_uri,
+                        "mime_type": result.mime_type
+                    })
                     self.file_uploaded.emit(result.filename, result.google_file_uri)
                 except Exception as e:
                     logger.error(f"Failed to upload file {file_path}: {e}")
@@ -106,7 +110,7 @@ class StreamWorker(QThread):
                 self.message,
                 attached_document_ids=doc_ids,
                 client_id=self.client_id,
-                google_file_uris=google_file_uris if google_file_uris else None
+                google_files=google_files if google_files else None
             ):
                 if self._stop_requested:
                     break

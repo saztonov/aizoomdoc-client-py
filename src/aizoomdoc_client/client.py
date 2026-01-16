@@ -263,7 +263,7 @@ class AIZoomDocClient:
         attached_file_ids: Optional[List[UUID]] = None,
         attached_document_ids: Optional[List[UUID]] = None,
         client_id: Optional[str] = None,
-        google_file_uris: Optional[List[str]] = None
+        google_files: Optional[List[dict]] = None
     ) -> Iterator[StreamEvent]:
         """
         Отправить сообщение в чат со стримингом ответа.
@@ -274,7 +274,7 @@ class AIZoomDocClient:
             attached_file_ids: ID прикреплённых файлов
             attached_document_ids: ID документов из дерева проектов
             client_id: ID клиента
-            google_file_uris: URI файлов из Google File API
+            google_files: Файлы из Google File API [{uri, mime_type}]
         
         Yields:
             События стриминга (фазы, токены LLM, ошибки)
@@ -293,8 +293,8 @@ class AIZoomDocClient:
             data["attached_file_ids"] = [str(fid) for fid in attached_file_ids]
         if attached_document_ids:
             data["attached_document_ids"] = [str(did) for did in attached_document_ids]
-        if google_file_uris:
-            data["google_file_uris"] = google_file_uris
+        if google_files:
+            data["google_files"] = google_files
         
         # Отправляем сообщение
         response = self._http.post(f"/chats/{chat_id}/messages", json=data)
@@ -305,8 +305,9 @@ class AIZoomDocClient:
             params["client_id"] = client_id
         if attached_document_ids:
             params["document_ids"] = [str(did) for did in attached_document_ids]
-        if google_file_uris:
-            params["google_file_uris"] = google_file_uris
+        if google_files:
+            import json
+            params["google_files"] = json.dumps(google_files)
 
         yield from self._http.stream_sse(
             f"/chats/{chat_id}/stream",
