@@ -262,7 +262,8 @@ class AIZoomDocClient:
         message: str,
         attached_file_ids: Optional[List[UUID]] = None,
         attached_document_ids: Optional[List[UUID]] = None,
-        client_id: Optional[str] = None
+        client_id: Optional[str] = None,
+        google_file_uris: Optional[List[str]] = None
     ) -> Iterator[StreamEvent]:
         """
         Отправить сообщение в чат со стримингом ответа.
@@ -271,6 +272,9 @@ class AIZoomDocClient:
             chat_id: ID чата
             message: Текст сообщения
             attached_file_ids: ID прикреплённых файлов
+            attached_document_ids: ID документов из дерева проектов
+            client_id: ID клиента
+            google_file_uris: URI файлов из Google File API
         
         Yields:
             События стриминга (фазы, токены LLM, ошибки)
@@ -289,6 +293,8 @@ class AIZoomDocClient:
             data["attached_file_ids"] = [str(fid) for fid in attached_file_ids]
         if attached_document_ids:
             data["attached_document_ids"] = [str(did) for did in attached_document_ids]
+        if google_file_uris:
+            data["google_file_uris"] = google_file_uris
         
         # Отправляем сообщение
         response = self._http.post(f"/chats/{chat_id}/messages", json=data)
@@ -299,6 +305,8 @@ class AIZoomDocClient:
             params["client_id"] = client_id
         if attached_document_ids:
             params["document_ids"] = [str(did) for did in attached_document_ids]
+        if google_file_uris:
+            params["google_file_uris"] = google_file_uris
 
         yield from self._http.stream_sse(
             f"/chats/{chat_id}/stream",
@@ -386,6 +394,25 @@ class AIZoomDocClient:
         
         response = self._http.upload_file("/files/upload", path)
         return FileUploadResponse(**response.json())
+    
+    def upload_file_for_llm(self, file_path: str | Path) -> "GoogleFileUploadResponse":
+        """
+        Загрузить файл через Google File API для использования в LLM.
+        
+        Args:
+            file_path: Путь к файлу (MD, HTML, TXT, PDF, изображения)
+        
+        Returns:
+            Информация о файле с Google File URI
+        """
+        from aizoomdoc_client.models import GoogleFileUploadResponse
+        
+        path = Path(file_path)
+        if not path.exists():
+            raise AIZoomDocError(f"File not found: {path}")
+        
+        response = self._http.upload_file("/files/upload-for-llm", path)
+        return GoogleFileUploadResponse(**response.json())
     
     def get_file(self, file_id: UUID) -> FileInfo:
         """

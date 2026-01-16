@@ -60,6 +60,7 @@ class StreamWorker(QThread):
     token_received = pyqtSignal(str)
     phase_started = pyqtSignal(str, str)
     error_occurred = pyqtSignal(str)
+    file_uploaded = pyqtSignal(str, str)  # filename, google_uri
     completed = pyqtSignal()
     
     def __init__(
@@ -68,7 +69,8 @@ class StreamWorker(QThread):
         chat_id: str,
         message: str,
         document_ids: Optional[List[str]] = None,
-        client_id: Optional[str] = None
+        client_id: Optional[str] = None,
+        local_files: Optional[List[str]] = None
     ):
         super().__init__()
         self.client = client
@@ -76,6 +78,7 @@ class StreamWorker(QThread):
         self.message = message
         self.document_ids = document_ids or []
         self.client_id = client_id
+        self.local_files = local_files or []
         self._stop_requested = False
     
     def run(self):
@@ -83,13 +86,27 @@ class StreamWorker(QThread):
             from uuid import UUID
             chat_uuid = UUID(self.chat_id)
             
-            from uuid import UUID
+            # Upload local files to Google File API first
+            google_file_uris = []
+            for file_path in self.local_files:
+                if self._stop_requested:
+                    break
+                try:
+                    self.phase_started.emit("upload", f"Загрузка {file_path}...")
+                    result = self.client.upload_file_for_llm(file_path)
+                    google_file_uris.append(result.google_file_uri)
+                    self.file_uploaded.emit(result.filename, result.google_file_uri)
+                except Exception as e:
+                    logger.error(f"Failed to upload file {file_path}: {e}")
+                    self.error_occurred.emit(f"Ошибка загрузки файла: {e}")
+            
             doc_ids = [UUID(did) for did in self.document_ids] if self.document_ids else None
             for event in self.client.send_message(
                 chat_uuid,
                 self.message,
                 attached_document_ids=doc_ids,
-                client_id=self.client_id
+                client_id=self.client_id,
+                google_file_uris=google_file_uris if google_file_uris else None
             ):
                 if self._stop_requested:
                     break
@@ -253,6 +270,7 @@ class ChatWidget(QWidget):
         self.current_chat_id: Optional[str] = None
         self.worker: Optional[StreamWorker] = None
         self.attachments_provider = None
+        self.attached_files: List[dict] = []  # List of attached files
         self._setup_ui()
     
     def _setup_ui(self):
@@ -270,7 +288,49 @@ class ChatWidget(QWidget):
         self.status_label.setStyleSheet("color: #666; font-style: italic;")
         layout.addWidget(self.status_label)
         
-        # Input area
+        # Attachments panel
+        self.attachments_panel = QWidget()
+        attachments_layout = QHBoxLayout(self.attachments_panel)
+        attachments_layout.setContentsMargins(0, 5, 0, 5)
+        
+        self.attachments_label = QLabel("Прикреплено: 0 файлов")
+        self.attachments_label.setStyleSheet("color: #0066cc;")
+        attachments_layout.addWidget(self.attachments_label)
+        
+        self.attachments_list = QLabel("")
+        self.attachments_list.setStyleSheet("color: #666; font-size: 10px;")
+        self.attachments_list.setWordWrap(True)
+        attachments_layout.addWidget(self.attachments_list, 1)
+        
+        self.clear_attachments_btn = QPushButton("Очистить")
+        self.clear_attachments_btn.setMaximumWidth(80)
+        self.clear_attachments_btn.clicked.connect(self._clear_attachments)
+        attachments_layout.addWidget(self.clear_attachments_btn)
+        
+        self.attachments_panel.setVisible(False)
+        layout.addWidget(self.attachments_panel)
+        
+        # Input area with buttons
+        input_container = QVBoxLayout()
+        
+        # Button row
+        btn_row = QHBoxLayout()
+        
+        self.attach_file_btn = QPushButton("📎 Прикрепить файл")
+        self.attach_file_btn.setMaximumWidth(150)
+        self.attach_file_btn.clicked.connect(self._attach_file)
+        btn_row.addWidget(self.attach_file_btn)
+        
+        self.attach_from_tree_btn = QPushButton("🌳 Из дерева")
+        self.attach_from_tree_btn.setMaximumWidth(120)
+        self.attach_from_tree_btn.setToolTip("Прикрепить выбранные документы из дерева проектов")
+        self.attach_from_tree_btn.clicked.connect(self._attach_from_tree)
+        btn_row.addWidget(self.attach_from_tree_btn)
+        
+        btn_row.addStretch()
+        input_container.addLayout(btn_row)
+        
+        # Text input row
         input_layout = QHBoxLayout()
         self.input_edit = QTextEdit()
         self.input_edit.setMaximumHeight(100)
@@ -284,11 +344,20 @@ class ChatWidget(QWidget):
         self.send_btn.clicked.connect(self._send_message)
         input_layout.addWidget(self.send_btn)
         
-        layout.addLayout(input_layout)
+        input_container.addLayout(input_layout)
+        layout.addLayout(input_container)
     
     def set_chat(self, chat_id: str):
         self.current_chat_id = chat_id
         self._load_history()
+    
+    def clear_for_new_chat(self):
+        """Очистить виджет для нового чата (без записи в БД)."""
+        self.current_chat_id = None
+        self.messages_area.clear()
+        self.input_edit.clear()
+        self.status_label.setText("")
+        self._clear_attachments()
     
     def _load_history(self):
         if not self.current_chat_id or not self.client:
@@ -353,13 +422,28 @@ class ChatWidget(QWidget):
         self.messages_area.ensureCursorVisible()
     
     def _send_message(self):
-        if not self.current_chat_id:
-            QMessageBox.warning(self, "Ошибка", "Сначала выберите или создайте чат")
-            return
-        
         message = self.input_edit.toPlainText().strip()
         if not message:
             return
+        
+        # Если чата нет - создаём с названием из первых 100 символов сообщения
+        if not self.current_chat_id:
+            if not self.client:
+                QMessageBox.warning(self, "Ошибка", "Сначала авторизуйтесь")
+                return
+            
+            try:
+                title = message[:100].strip()
+                if len(message) > 100:
+                    title += "..."
+                chat = self.client.create_chat(title=title)
+                self.current_chat_id = str(chat.id)
+                # Уведомляем о создании нового чата (для обновления списка)
+                if hasattr(self, 'on_chat_created') and callable(self.on_chat_created):
+                    self.on_chat_created(self.current_chat_id, title)
+            except Exception as e:
+                QMessageBox.warning(self, "Ошибка", f"Не удалось создать чат: {e}")
+                return
         
         self.input_edit.clear()
         self._append_message("user", message)
@@ -374,11 +458,24 @@ class ChatWidget(QWidget):
         cursor.insertHtml('<p style="color: #009933; margin: 10px 0;"><b>Ассистент:</b></p><p style="margin: 5px 0 15px 20px;">')
         self.messages_area.setTextCursor(cursor)
         
+        # Collect document IDs from attachments
         document_ids = []
+        local_files = []
+        
+        # From attached files in chat widget
+        for att in self.attached_files:
+            if att.get("type") == "tree" and att.get("doc_id"):
+                document_ids.append(att["doc_id"])
+            elif att.get("type") == "local" and att.get("path"):
+                local_files.append(att["path"])
+        
+        # Also check tree selection via attachments_provider
         client_id = None
         if callable(self.attachments_provider):
             ctx = self.attachments_provider() or {}
-            document_ids = ctx.get("document_ids", [])
+            for doc_id in ctx.get("document_ids", []):
+                if doc_id not in document_ids:
+                    document_ids.append(doc_id)
             client_id = ctx.get("client_id")
 
         self.worker = StreamWorker(
@@ -386,13 +483,17 @@ class ChatWidget(QWidget):
             self.current_chat_id,
             message,
             document_ids=document_ids,
-            client_id=client_id
+            client_id=client_id,
+            local_files=local_files
         )
         self.worker.token_received.connect(self._on_token)
         self.worker.phase_started.connect(self._on_phase)
         self.worker.error_occurred.connect(self._on_error)
         self.worker.completed.connect(self._on_completed)
         self.worker.start()
+        
+        # Clear attachments after sending
+        self._clear_attachments()
     
     def _on_token(self, token: str):
         cursor = self.messages_area.textCursor()
@@ -407,6 +508,80 @@ class ChatWidget(QWidget):
     def _on_error(self, error: str):
         self.status_label.setText(f"Ошибка: {error}")
         self.send_btn.setEnabled(True)
+    
+    def _attach_file(self):
+        """Attach a local file (MD, HTML, TXT)."""
+        from PyQt6.QtWidgets import QFileDialog
+        
+        files, _ = QFileDialog.getOpenFileNames(
+            self,
+            "Выберите файлы для прикрепления",
+            "",
+            "Документы (*.md *.html *.txt *.pdf);;Все файлы (*.*)"
+        )
+        
+        for file_path in files:
+            import os
+            file_name = os.path.basename(file_path)
+            self.attached_files.append({
+                "type": "local",
+                "path": file_path,
+                "name": file_name
+            })
+        
+        self._update_attachments_display()
+    
+    def _attach_from_tree(self):
+        """Attach documents selected in the projects tree."""
+        if not callable(self.attachments_provider):
+            QMessageBox.warning(self, "Ошибка", "Дерево проектов недоступно")
+            return
+        
+        ctx = self.attachments_provider() or {}
+        doc_ids = ctx.get("document_ids", [])
+        
+        if not doc_ids:
+            QMessageBox.information(self, "Информация", "Выберите документы в дереве проектов (вкладка 'Дерево')")
+            return
+        
+        for doc_id in doc_ids:
+            # Check if already attached
+            if not any(f.get("doc_id") == doc_id for f in self.attached_files):
+                self.attached_files.append({
+                    "type": "tree",
+                    "doc_id": doc_id,
+                    "name": f"Документ {doc_id[:8]}..."
+                })
+        
+        self._update_attachments_display()
+    
+    def _clear_attachments(self):
+        """Clear all attachments."""
+        self.attached_files.clear()
+        self._update_attachments_display()
+    
+    def _update_attachments_display(self):
+        """Update the attachments panel display."""
+        count = len(self.attached_files)
+        self.attachments_label.setText(f"Прикреплено: {count} файл(ов)")
+        
+        if count > 0:
+            names = [f.get("name", "?") for f in self.attached_files]
+            self.attachments_list.setText(", ".join(names))
+            self.attachments_panel.setVisible(True)
+        else:
+            self.attachments_list.setText("")
+            self.attachments_panel.setVisible(False)
+    
+    def add_attachment(self, doc_id: str, name: str):
+        """Add a document attachment from external source."""
+        if not any(f.get("doc_id") == doc_id for f in self.attached_files):
+            self.attached_files.append({
+                "type": "tree",
+                "doc_id": doc_id,
+                "name": name
+            })
+            self._update_attachments_display()
     
     def _on_completed(self):
         self.status_label.setText("")
@@ -734,6 +909,7 @@ class MainWindow(QMainWindow):
         # Chat widget
         self.chat_widget = ChatWidget()
         self.chat_widget.attachments_provider = self._get_message_context
+        self.chat_widget.on_chat_created = self._on_new_chat_created
         splitter.addWidget(self.chat_widget)
         
         splitter.setSizes([300, 900])
@@ -834,6 +1010,10 @@ class MainWindow(QMainWindow):
     
     def _on_chat_selected(self, chat_id: str):
         self.chat_widget.set_chat(chat_id)
+    
+    def _on_new_chat_created(self, chat_id: str, title: str):
+        """Добавить новый чат в список после его создания."""
+        self.left_panel.add_chat(chat_id, title)
 
     def _get_message_context(self) -> dict:
         """Получить client_id и выбранные документы для сообщения."""
@@ -845,21 +1025,15 @@ class MainWindow(QMainWindow):
         }
     
     def _create_new_chat(self):
+        """Открыть пустое окно для нового чата (запись в БД при первом сообщении)."""
         if not self.client:
             QMessageBox.warning(self, "Ошибка", "Сначала авторизуйтесь")
             return
         
-        from PyQt6.QtWidgets import QInputDialog
-        title, ok = QInputDialog.getText(self, "Новый чат", "Название чата:")
-        if not ok or not title.strip():
-            return
-        
-        try:
-            chat = self.client.create_chat(title=title.strip())
-            self.left_panel.add_chat(str(chat.id), chat.title)
-            self.chat_widget.set_chat(str(chat.id))
-        except Exception as e:
-            QMessageBox.warning(self, "Ошибка", f"Не удалось создать чат: {e}")
+        # Просто очищаем чат виджет, не создаём запись в БД
+        self.chat_widget.clear_for_new_chat()
+        # Снимаем выделение в списке чатов
+        self.left_panel.chat_list.clearSelection()
 
 
 def run_gui():

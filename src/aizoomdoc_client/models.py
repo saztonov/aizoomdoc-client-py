@@ -170,6 +170,17 @@ class FileUploadResponse(BaseModel):
     created_at: datetime
 
 
+class GoogleFileUploadResponse(BaseModel):
+    """Ответ после загрузки файла в Google File API."""
+    id: Optional[UUID] = None
+    filename: str
+    mime_type: str
+    size_bytes: int
+    google_file_uri: str
+    google_file_name: str
+    state: str = "ACTIVE"
+
+
 # ===== PROJECTS TREE MODELS (read-only) =====
 
 class TreeNode(BaseModel):
