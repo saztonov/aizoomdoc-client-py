@@ -40,6 +40,12 @@ class UserSettings(BaseModel):
         default=None,
         description="ID выбранной роли из prompts_user (bigint)"
     )
+    # LLM параметры
+    temperature: float = Field(default=1.0, description="Температура генерации (0.0-2.0)")
+    top_p: float = Field(default=0.95, description="Top-p sampling (0.0-1.0)")
+    thinking_enabled: bool = Field(default=True, description="Режим thinking (deep think)")
+    thinking_budget: int = Field(default=0, description="Бюджет токенов для thinking (0=авто)")
+    media_resolution: Literal["low", "medium", "high"] = Field(default="high", description="Разрешение медиа")
 
 
 class UserMeResponse(BaseModel):

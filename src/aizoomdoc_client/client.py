@@ -128,7 +128,12 @@ class AIZoomDocClient:
     def update_settings(
         self,
         model_profile: Optional[Literal["simple", "complex"]] = None,
-        selected_role_prompt_id: Optional[int] = None
+        selected_role_prompt_id: Optional[int] = None,
+        temperature: Optional[float] = None,
+        top_p: Optional[float] = None,
+        thinking_enabled: Optional[bool] = None,
+        thinking_budget: Optional[int] = None,
+        media_resolution: Optional[Literal["low", "medium", "high"]] = None
     ) -> UserSettings:
         """
         Обновить настройки пользователя.
@@ -136,6 +141,11 @@ class AIZoomDocClient:
         Args:
             model_profile: Режим модели ("simple" или "complex")
             selected_role_prompt_id: ID выбранной роли (int)
+            temperature: Температура генерации (0.0-2.0)
+            top_p: Top-p sampling (0.0-1.0)
+            thinking_enabled: Включить режим thinking
+            thinking_budget: Бюджет токенов для thinking (0=авто)
+            media_resolution: Разрешение медиа ("low", "medium", "high")
         
         Returns:
             Обновлённые настройки
@@ -145,6 +155,16 @@ class AIZoomDocClient:
             data["model_profile"] = model_profile
         if selected_role_prompt_id is not None:
             data["selected_role_prompt_id"] = selected_role_prompt_id
+        if temperature is not None:
+            data["temperature"] = temperature
+        if top_p is not None:
+            data["top_p"] = top_p
+        if thinking_enabled is not None:
+            data["thinking_enabled"] = thinking_enabled
+        if thinking_budget is not None:
+            data["thinking_budget"] = thinking_budget
+        if media_resolution is not None:
+            data["media_resolution"] = media_resolution
         
         response = self._http.patch("/me/settings", json=data)
         return UserSettings(**response.json())

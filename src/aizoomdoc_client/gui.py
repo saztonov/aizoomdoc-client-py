@@ -22,7 +22,8 @@ from PyQt6.QtWidgets import (
     QListWidget, QListWidgetItem, QFrame, QScrollArea, QProgressBar,
     QMenuBar, QMenu, QDialog, QDialogButtonBox, QMessageBox,
     QGroupBox, QSizePolicy, QTabWidget, QTextBrowser, QStackedWidget,
-    QStatusBar, QToolBar, QTreeWidget, QTreeWidgetItem, QButtonGroup
+    QStatusBar, QToolBar, QTreeWidget, QTreeWidgetItem, QButtonGroup,
+    QDoubleSpinBox, QSpinBox, QFormLayout, QCheckBox
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QSize, QTimer, QUrl, QByteArray
 from PyQt6.QtGui import QFont, QAction, QTextCursor, QIcon, QColor, QPixmap, QImage
@@ -203,7 +204,7 @@ class SettingsDialog(QDialog):
         super().__init__(parent)
         self.client = client
         self.setWindowTitle("Настройки")
-        self.setMinimumWidth(500)
+        self.setMinimumWidth(550)
         
         layout = QVBoxLayout(self)
         
@@ -224,6 +225,61 @@ class SettingsDialog(QDialog):
         role_layout.addWidget(self.role_combo)
         layout.addWidget(role_group)
         
+        # LLM Parameters
+        llm_group = QGroupBox("Параметры LLM")
+        llm_layout = QFormLayout(llm_group)
+        
+        # Temperature
+        self.temp_spin = QDoubleSpinBox()
+        self.temp_spin.setRange(0.0, 2.0)
+        self.temp_spin.setSingleStep(0.1)
+        self.temp_spin.setValue(1.0)
+        self.temp_spin.setToolTip("Температура генерации (0=детерминированно, 2=максимально креативно)")
+        llm_layout.addRow("Температура:", self.temp_spin)
+        
+        # Top-p
+        self.top_p_spin = QDoubleSpinBox()
+        self.top_p_spin.setRange(0.0, 1.0)
+        self.top_p_spin.setSingleStep(0.05)
+        self.top_p_spin.setValue(0.95)
+        self.top_p_spin.setToolTip("Top-p sampling (nucleus sampling)")
+        llm_layout.addRow("Top-p:", self.top_p_spin)
+        
+        layout.addWidget(llm_group)
+        
+        # Thinking mode
+        thinking_group = QGroupBox("Режим Thinking (Deep Think)")
+        thinking_layout = QVBoxLayout(thinking_group)
+        
+        self.thinking_checkbox = QCheckBox("Включить режим Thinking")
+        self.thinking_checkbox.setChecked(True)
+        self.thinking_checkbox.setToolTip("Модель будет 'размышлять' перед ответом для более качественных результатов")
+        thinking_layout.addWidget(self.thinking_checkbox)
+        
+        budget_layout = QHBoxLayout()
+        budget_layout.addWidget(QLabel("Бюджет токенов:"))
+        self.thinking_budget_spin = QSpinBox()
+        self.thinking_budget_spin.setRange(0, 24576)
+        self.thinking_budget_spin.setSingleStep(1024)
+        self.thinking_budget_spin.setValue(0)
+        self.thinking_budget_spin.setToolTip("0 = автоматически, иначе ограничение токенов на размышления")
+        self.thinking_budget_spin.setSpecialValueText("Авто")
+        budget_layout.addWidget(self.thinking_budget_spin)
+        thinking_layout.addLayout(budget_layout)
+        
+        layout.addWidget(thinking_group)
+        
+        # Media resolution
+        media_group = QGroupBox("Разрешение медиа")
+        media_layout = QVBoxLayout(media_group)
+        self.media_combo = QComboBox()
+        self.media_combo.addItem("Низкое (быстрее, меньше токенов)", "low")
+        self.media_combo.addItem("Среднее", "medium")
+        self.media_combo.addItem("Высокое (лучшее качество)", "high")
+        self.media_combo.setCurrentIndex(2)  # high по умолчанию
+        media_layout.addWidget(self.media_combo)
+        layout.addWidget(media_group)
+        
         self._load_settings()
         
         # Buttons
@@ -238,7 +294,9 @@ class SettingsDialog(QDialog):
     def _load_settings(self):
         try:
             user_info = self.client.get_me()
-            idx = self.model_combo.findData(user_info.settings.model_profile)
+            s = user_info.settings
+            
+            idx = self.model_combo.findData(s.model_profile)
             if idx >= 0:
                 self.model_combo.setCurrentIndex(idx)
             
@@ -247,10 +305,22 @@ class SettingsDialog(QDialog):
                 name = fix_mojibake(role.name)
                 self.role_combo.addItem(name, role.id)
             
-            if user_info.settings.selected_role_prompt_id:
-                idx = self.role_combo.findData(user_info.settings.selected_role_prompt_id)
+            if s.selected_role_prompt_id:
+                idx = self.role_combo.findData(s.selected_role_prompt_id)
                 if idx >= 0:
                     self.role_combo.setCurrentIndex(idx)
+            
+            # LLM параметры
+            self.temp_spin.setValue(getattr(s, 'temperature', 1.0))
+            self.top_p_spin.setValue(getattr(s, 'top_p', 0.95))
+            self.thinking_checkbox.setChecked(getattr(s, 'thinking_enabled', True))
+            self.thinking_budget_spin.setValue(getattr(s, 'thinking_budget', 0))
+            
+            media_res = getattr(s, 'media_resolution', 'high')
+            idx = self.media_combo.findData(media_res)
+            if idx >= 0:
+                self.media_combo.setCurrentIndex(idx)
+                
         except Exception as e:
             logger.error(f"Error loading settings: {e}")
     
@@ -258,7 +328,12 @@ class SettingsDialog(QDialog):
         try:
             self.client.update_settings(
                 model_profile=self.model_combo.currentData(),
-                selected_role_prompt_id=self.role_combo.currentData()
+                selected_role_prompt_id=self.role_combo.currentData(),
+                temperature=self.temp_spin.value(),
+                top_p=self.top_p_spin.value(),
+                thinking_enabled=self.thinking_checkbox.isChecked(),
+                thinking_budget=self.thinking_budget_spin.value(),
+                media_resolution=self.media_combo.currentData()
             )
             self.accept()
         except Exception as e:
