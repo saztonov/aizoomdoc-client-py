@@ -351,8 +351,10 @@ def chat_send(ctx, message: str, chat_id: Optional[str], no_stream: bool):
             # Стриминг
             response_text = ""
             current_phase = ""
+            printed_tokens = False
             
             console.print("[dim]Ассистент:[/dim]")
+            console.print("[dim cyan]→ Диалог с LLM активен...[/dim cyan]")
             
             for event in client.send_message(target_chat_id, message):
                 if event.event == "phase_started":
@@ -368,10 +370,13 @@ def chat_send(ctx, message: str, chat_id: Optional[str], no_stream: bool):
                 elif event.event == "llm_token":
                     token = event.data.get("token", "")
                     response_text += token
+                    printed_tokens = True
                     console.print(token, end="")
                 
                 elif event.event == "llm_final":
                     response_text = event.data.get("content", response_text)
+                    if response_text and not printed_tokens:
+                        console.print(response_text, end="")
                 
                 elif event.event == "tool_call":
                     tool = event.data.get("tool", "")

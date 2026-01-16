@@ -81,6 +81,7 @@ class StreamWorker(QThread):
         self.client_id = client_id
         self.local_files = local_files or []
         self._stop_requested = False
+        self._received_tokens = False
     
     def run(self):
         try:
@@ -98,7 +99,8 @@ class StreamWorker(QThread):
                     # Передаём и URI, и mime_type
                     google_files.append({
                         "uri": result.google_file_uri,
-                        "mime_type": result.mime_type
+                        "mime_type": result.mime_type,
+                        "storage_path": result.storage_path
                     })
                     self.file_uploaded.emit(result.filename, result.google_file_uri)
                 except Exception as e:
@@ -118,11 +120,17 @@ class StreamWorker(QThread):
                 
                 if event.event == "llm_token":
                     token = event.data.get("token", "")
+                    if token:
+                        self._received_tokens = True
                     self.token_received.emit(token)
                 elif event.event == "phase_started":
                     phase = event.data.get("phase", "")
                     desc = event.data.get("description", "")
                     self.phase_started.emit(phase, desc)
+                elif event.event == "llm_final":
+                    content = event.data.get("content", "")
+                    if content and not self._received_tokens:
+                        self.token_received.emit(content)
                 elif event.event == "error":
                     msg = event.data.get("message", "Unknown error")
                     self.error_occurred.emit(msg)
@@ -364,7 +372,9 @@ class ChatWidget(QWidget):
         
         # Status
         self.status_label = QLabel("")
-        self.status_label.setStyleSheet("color: #666; font-style: italic;")
+        self._status_idle_style = "color: #666; font-style: italic;"
+        self._status_active_style = "color: #0066cc; font-weight: bold;"
+        self.status_label.setStyleSheet(self._status_idle_style)
         layout.addWidget(self.status_label)
         
         # Attachments panel
@@ -530,7 +540,9 @@ class ChatWidget(QWidget):
     
     def _start_streaming(self, message: str):
         self.send_btn.setEnabled(False)
-        self.status_label.setText("Обработка...")
+        self.status_label.setStyleSheet(self._status_active_style)
+        self.status_label.setText("⏳ Диалог с LLM активен...")
+        self.status_label.setVisible(True)
         
         cursor = self.messages_area.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.End)
@@ -582,9 +594,11 @@ class ChatWidget(QWidget):
         self.messages_area.ensureCursorVisible()
     
     def _on_phase(self, phase: str, desc: str):
+        self.status_label.setStyleSheet(self._status_active_style)
         self.status_label.setText(f"[{phase}] {desc}")
     
     def _on_error(self, error: str):
+        self.status_label.setStyleSheet(self._status_active_style)
         self.status_label.setText(f"Ошибка: {error}")
         self.send_btn.setEnabled(True)
     
@@ -663,6 +677,7 @@ class ChatWidget(QWidget):
             self._update_attachments_display()
     
     def _on_completed(self):
+        self.status_label.setStyleSheet(self._status_idle_style)
         self.status_label.setText("")
         self.send_btn.setEnabled(True)
         cursor = self.messages_area.textCursor()
