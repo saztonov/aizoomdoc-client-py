@@ -501,6 +501,7 @@ class LeftPanel(QWidget):
         self.tree_widget.setItemsExpandable(True)
         self.tree_widget.setSelectionMode(QTreeWidget.SelectionMode.ExtendedSelection)
         self.tree_widget.itemSelectionChanged.connect(self._update_selected_docs)
+        self.tree_widget.itemExpanded.connect(self._on_tree_item_expanded)
         tree_layout.addWidget(self.tree_widget, 1)
         
         self.stack.addWidget(tree_page)
@@ -547,9 +548,9 @@ class LeftPanel(QWidget):
             return
         
         try:
-            # Get projects tree from server
+            # Get ALL projects tree nodes from server (like v1 app)
             client_id = self.client_id_edit.text().strip() or None
-            tree_data = self.client.get_projects_tree(client_id=client_id)
+            tree_data = self.client.get_projects_tree(client_id=client_id, all_nodes=True)
             self.tree_widget.clear()
             
             if tree_data:
@@ -559,6 +560,7 @@ class LeftPanel(QWidget):
                     node_dict = node.model_dump() if hasattr(node, 'model_dump') else node.__dict__
                     nodes.append(node_dict)
 
+                # Create QTreeWidgetItem for each node
                 node_items: dict[str, QTreeWidgetItem] = {}
                 for node in nodes:
                     item = QTreeWidgetItem()
@@ -568,11 +570,9 @@ class LeftPanel(QWidget):
                     item.setText(1, node_type)
                     item.setData(0, Qt.ItemDataRole.UserRole, node.get("id"))
                     item.setData(0, Qt.ItemDataRole.UserRole + 1, node_type)
-                    # Force expand indicator if there are children
-                    if node.get("children_count", 0) or node.get("descendants_count", 0):
-                        item.addChild(QTreeWidgetItem(["...", ""]))
                     node_items[str(node.get("id"))] = item
 
+                # Build hierarchy by parent_id
                 root_items = []
                 for node in nodes:
                     item = node_items.get(str(node.get("id")))
@@ -582,8 +582,11 @@ class LeftPanel(QWidget):
                     else:
                         root_items.append(item)
 
+                # Add root items to tree
                 for item in root_items:
                     self.tree_widget.addTopLevelItem(item)
+                
+                logger.info(f"Tree loaded: {len(nodes)} nodes, {len(root_items)} root items")
             else:
                 QMessageBox.information(self, "Информация", "Дерево проектов пусто")
         except Exception as e:
@@ -611,6 +614,46 @@ class LeftPanel(QWidget):
     def _update_selected_docs(self):
         doc_ids = self.get_selected_document_ids()
         self.selected_docs_label.setText(f"Выбрано документов: {len(doc_ids)}")
+    
+    def _on_tree_item_expanded(self, item: QTreeWidgetItem):
+        """Lazy-load children when node is expanded."""
+        if not self.client:
+            return
+        
+        # Check if this item has a placeholder child
+        if item.childCount() == 1 and item.child(0).text(0) == "...":
+            # Remove placeholder
+            item.takeChild(0)
+            
+            # Load actual children
+            parent_id = item.data(0, Qt.ItemDataRole.UserRole)
+            if not parent_id:
+                return
+            
+            try:
+                from uuid import UUID
+                children = self.client.get_projects_tree(
+                    client_id=self.client_id_edit.text().strip() or None,
+                    parent_id=UUID(str(parent_id))
+                )
+                
+                for child_node in children:
+                    node_dict = child_node.model_dump() if hasattr(child_node, 'model_dump') else child_node.__dict__
+                    child_item = QTreeWidgetItem()
+                    name = fix_mojibake(node_dict.get("name", ""))
+                    node_type = node_dict.get("node_type", "")
+                    child_item.setText(0, name)
+                    child_item.setText(1, node_type)
+                    child_item.setData(0, Qt.ItemDataRole.UserRole, node_dict.get("id"))
+                    child_item.setData(0, Qt.ItemDataRole.UserRole + 1, node_type)
+                    
+                    # Add placeholder if this child has children
+                    if node_dict.get("children_count", 0) or node_dict.get("descendants_count", 0):
+                        child_item.addChild(QTreeWidgetItem(["...", ""]))
+                    
+                    item.addChild(child_item)
+            except Exception as e:
+                logger.error(f"Error loading children: {e}")
 
     def get_selected_document_ids(self) -> List[str]:
         selected = []

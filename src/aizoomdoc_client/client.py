@@ -405,7 +405,8 @@ class AIZoomDocClient:
     def get_projects_tree(
         self,
         client_id: Optional[str] = None,
-        parent_id: Optional[UUID] = None
+        parent_id: Optional[UUID] = None,
+        all_nodes: bool = False
     ) -> List[TreeNode]:
         """
         Получить дерево проектов.
@@ -413,6 +414,7 @@ class AIZoomDocClient:
         Args:
             client_id: ID клиента (организации)
             parent_id: ID родительского узла
+            all_nodes: Получить все узлы (для построения дерева на клиенте)
         
         Returns:
             Список узлов дерева
@@ -422,6 +424,8 @@ class AIZoomDocClient:
             params["client_id"] = client_id
         if parent_id:
             params["parent_id"] = str(parent_id)
+        if all_nodes:
+            params["all_nodes"] = "true"
         
         response = self._http.get("/projects/tree", params=params)
         data = response.json()
