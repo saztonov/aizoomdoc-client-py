@@ -381,12 +381,6 @@ class ChatWidget(QWidget):
             document_ids = ctx.get("document_ids", [])
             client_id = ctx.get("client_id")
 
-        if not client_id:
-            QMessageBox.warning(self, "Ошибка", "Не указан Client ID (вкладка Дерево)")
-            self.send_btn.setEnabled(True)
-            self.status_label.setText("")
-            return
-
         self.worker = StreamWorker(
             self.client,
             self.current_chat_id,
@@ -489,8 +483,7 @@ class LeftPanel(QWidget):
         client_layout = QHBoxLayout()
         client_layout.addWidget(QLabel("Client ID:"))
         self.client_id_edit = QLineEdit()
-        self.client_id_edit.setPlaceholderText("Введите ID клиента")
-        self.client_id_edit.setText("ngs")  # Default
+        self.client_id_edit.setPlaceholderText("Опционально (можно оставить пустым)")
         client_layout.addWidget(self.client_id_edit)
         tree_layout.addLayout(client_layout)
         
@@ -504,6 +497,8 @@ class LeftPanel(QWidget):
         self.tree_widget = QTreeWidget()
         self.tree_widget.setHeaderLabels(["Название", "Тип"])
         self.tree_widget.setColumnWidth(0, 200)
+        self.tree_widget.setRootIsDecorated(True)
+        self.tree_widget.setItemsExpandable(True)
         self.tree_widget.setSelectionMode(QTreeWidget.SelectionMode.ExtendedSelection)
         self.tree_widget.itemSelectionChanged.connect(self._update_selected_docs)
         tree_layout.addWidget(self.tree_widget, 1)
@@ -551,20 +546,44 @@ class LeftPanel(QWidget):
         if not self.client:
             return
         
-        client_id = self.client_id_edit.text().strip()
-        if not client_id:
-            QMessageBox.warning(self, "Ошибка", "Введите Client ID")
-            return
-        
         try:
             # Get projects tree from server
+            client_id = self.client_id_edit.text().strip() or None
             tree_data = self.client.get_projects_tree(client_id=client_id)
             self.tree_widget.clear()
             
             if tree_data:
+                # Build hierarchy from flat list (as in v1)
+                nodes = []
                 for node in tree_data:
                     node_dict = node.model_dump() if hasattr(node, 'model_dump') else node.__dict__
-                    self._add_tree_node(None, node_dict)
+                    nodes.append(node_dict)
+
+                node_items: dict[str, QTreeWidgetItem] = {}
+                for node in nodes:
+                    item = QTreeWidgetItem()
+                    name = fix_mojibake(node.get("name", ""))
+                    node_type = node.get("node_type", "")
+                    item.setText(0, name)
+                    item.setText(1, node_type)
+                    item.setData(0, Qt.ItemDataRole.UserRole, node.get("id"))
+                    item.setData(0, Qt.ItemDataRole.UserRole + 1, node_type)
+                    # Force expand indicator if there are children
+                    if node.get("children_count", 0) or node.get("descendants_count", 0):
+                        item.addChild(QTreeWidgetItem(["...", ""]))
+                    node_items[str(node.get("id"))] = item
+
+                root_items = []
+                for node in nodes:
+                    item = node_items.get(str(node.get("id")))
+                    parent_id = node.get("parent_id")
+                    if parent_id and str(parent_id) in node_items:
+                        node_items[str(parent_id)].addChild(item)
+                    else:
+                        root_items.append(item)
+
+                for item in root_items:
+                    self.tree_widget.addTopLevelItem(item)
             else:
                 QMessageBox.information(self, "Информация", "Дерево проектов пусто")
         except Exception as e:

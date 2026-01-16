@@ -176,7 +176,7 @@ class TreeNode(BaseModel):
     """Узел дерева проектов."""
     id: UUID
     parent_id: Optional[UUID] = None
-    client_id: str
+    client_id: Optional[str] = None
     node_type: str
     name: str
     code: Optional[str] = None
