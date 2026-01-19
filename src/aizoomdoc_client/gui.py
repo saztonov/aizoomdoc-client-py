@@ -530,8 +530,8 @@ class ChatWidget(QWidget):
                                     padding: 12px 16px; 
                                     border-radius: 18px 18px 4px 18px; 
                                     text-align: right;">
-                            <b style="font-size: 9px; color: #666; display: block; margin-bottom: 4px;">Пользователь</b>
-                            <span style="white-space: pre-wrap;">{content}</span>
+                            <div style="font-size: 9px; color: #666; font-weight: bold; margin-bottom: 6px;">Пользователь</div>
+                            <div style="white-space: pre-wrap;">{content}</div>
                         </div>
                     </td>
                 </tr>
@@ -550,8 +550,8 @@ class ChatWidget(QWidget):
                                     padding: 12px 16px; 
                                     border-radius: 18px 18px 18px 4px; 
                                     border: 1px solid #e0e0e0; text-align: left;">
-                            <b style="font-size: 9px; color: #009933; display: block; margin-bottom: 4px;">{llm_label}</b>
-                            {formatted}
+                            <div style="font-size: 9px; color: #009933; font-weight: bold; margin-bottom: 6px;">{llm_label}</div>
+                            <div>{formatted}</div>
                         </div>
                     </td>
                     <td width="20%"></td>
@@ -657,7 +657,8 @@ class ChatWidget(QWidget):
                                 padding: 12px 16px; 
                                 border-radius: 18px 18px 18px 4px; 
                                 border: 1px solid #e0e0e0; text-align: left;">
-                        <b style="font-size: 9px; color: #009933; display: block; margin-bottom: 4px;">{llm_label}</b>
+                        <div style="font-size: 9px; color: #009933; font-weight: bold; margin-bottom: 6px;">{llm_label}</div>
+                        <div>
         ''')
         self.messages_area.setTextCursor(cursor)
         
@@ -819,6 +820,7 @@ class ChatWidget(QWidget):
         cursor.movePosition(QTextCursor.MoveOperation.End)
         # Закрываем блок ответа LLM
         cursor.insertHtml('''
+                        </div>
                     </div>
                 </td>
                 <td width="20%"></td>
