@@ -23,3 +23,4 @@ response = client.table("chats").select("id, title, user_id").limit(5).execute()
 for chat in response.data:
     print(f"  user_id='{chat['user_id']}' | title='{chat['title'][:50]}...'")
 
+

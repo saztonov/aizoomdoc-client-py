@@ -59,3 +59,4 @@ class ValidationError(APIError):
     def __init__(self, message: str = "Validation error", details: Optional[Dict[str, Any]] = None):
         super().__init__(message, status_code=422, error_type="validation_error", details=details)
 
+

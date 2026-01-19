@@ -27,3 +27,4 @@ response = client.table("users").select("id, username, static_token, status").ex
 for user in response.data:
     print(f"  {user['username']} | {user.get('status', 'N/A')}")
 
+

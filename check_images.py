@@ -33,3 +33,4 @@ response = client.table("storage_files").select("id, filename, source_type, stor
 for f in response.data:
     print(f"  id={str(f['id'])[:8]}... | type={f.get('source_type')} | path={f.get('storage_path', 'N/A')[:50] if f.get('storage_path') else 'N/A'}")
 
+
