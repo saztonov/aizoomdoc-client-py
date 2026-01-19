@@ -581,15 +581,6 @@ class ChatWidget(QWidget):
                                 data_url = f"data:{content_type};base64,{img_data}"
                                 html += f'<p><a href="{url}"><img src="{data_url}" width="400" style="max-width: 100%; border: 1px solid #ccc; margin: 5px 0;"/></a>'
                                 html += f'<br/><small style="color: #666;">{img_type}</small></p>'
-                                
-                                # Сохранить изображение локально
-                                if self.current_chat_id:
-                                    config = get_config_manager()
-                                    config.save_chat_image(
-                                        self.current_chat_id,
-                                        img_bytes,
-                                        img_type or "image"
-                                    )
                             else:
                                 html += f'<p><a href="{url}">[Файл: {img_type}]</a></p>'
                         else:
@@ -639,11 +630,6 @@ class ChatWidget(QWidget):
         
         # Сброс накопленного ответа
         self._accumulated_response = ""
-        
-        # Сохранить сообщение пользователя локально
-        if self.current_chat_id:
-            config = get_config_manager()
-            config.save_chat_message(self.current_chat_id, "user", message)
         
         cursor = self.messages_area.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.End)
@@ -702,20 +688,6 @@ class ChatWidget(QWidget):
         self.worker.thinking_received.connect(self._on_thinking)
         self.worker.image_ready.connect(self._on_image_ready)
         self.worker.start()
-        
-        # Логируем запрос пользователя с контекстом
-        if self.current_chat_id:
-            config = get_config_manager()
-            config.log_sse_event(
-                self.current_chat_id,
-                "user_request",
-                {
-                    "message": message,
-                    "document_ids": document_ids,
-                    "local_files": local_files,
-                    "client_id": client_id
-                }
-            )
         
         # Clear attachments after sending
         self._clear_attachments()
@@ -830,14 +802,6 @@ class ChatWidget(QWidget):
         self.messages_area.setTextCursor(cursor)
         self.messages_area.ensureCursorVisible()
         
-        # Сохранить ответ ассистента локально
-        if self._accumulated_response and self.current_chat_id:
-            config = get_config_manager()
-            config.save_chat_message(
-                self.current_chat_id,
-                "assistant",
-                self._accumulated_response
-            )
         self._accumulated_response = ""
     
     def _on_model_changed(self):
@@ -855,10 +819,8 @@ class ChatWidget(QWidget):
             QMessageBox.warning(self, "Ошибка", f"Не удалось сменить режим модели: {e}")
     
     def _on_sse_event(self, event_type: str, data: dict):
-        """Логировать SSE-событие в локальный файл."""
-        if self.current_chat_id:
-            config = get_config_manager()
-            config.log_sse_event(self.current_chat_id, event_type, data)
+        """Обработка SSE-событий (логирование отключено)."""
+        pass
     
     def _on_tool_call(self, tool: str, reason: str, params: dict):
         """Обработка запроса инструмента от LLM (request_images, zoom)."""
@@ -908,28 +870,12 @@ class ChatWidget(QWidget):
     def _on_file_uploaded(self, filename: str, uri: str):
         """Файл загружен в Google File API."""
         self.status_label.setText(f"📎 Загружен: {filename}")
-        if self.current_chat_id:
-            config = get_config_manager()
-            config.log_sse_event(
-                self.current_chat_id,
-                "file_uploaded",
-                {"filename": filename, "uri": uri}
-            )
     
     def _on_thinking(self, content: str):
         """Получен фрагмент thinking (размышлений) от LLM."""
         # Отображаем в статусе что идёт размышление
         self.status_label.setStyleSheet(self._status_active_style)
         self.status_label.setText("💭 LLM размышляет...")
-        
-        # Логируем thinking
-        if self.current_chat_id:
-            config = get_config_manager()
-            config.log_sse_event(
-                self.current_chat_id,
-                "thinking",
-                {"content": content}
-            )
     
     def _on_image_ready(self, data: dict):
         """Изображение готово - отобразить в чате."""
@@ -961,27 +907,19 @@ class ChatWidget(QWidget):
                 
                 # Вставляем HTML с изображением
                 html = f'''
-                <div style="margin: 5px 20px; padding: 5px; background: #f5f5f5; border: 1px solid #ddd; border-radius: 4px;">
-                    <p style="margin: 0 0 5px 0; color: #666; font-size: 10px;">
-                        📷 {block_id} ({kind}) - {reason}
-                    </p>
-                    <a href="{url}">
-                        <img src="{data_url}" width="350" style="max-width: 100%; border: 1px solid #ccc;"/>
-                    </a>
-                </div>
-                '''
+<div style="margin: 8px 0; padding: 8px; background: #f8f9fa; border: 1px solid #e0e0e0; border-radius: 8px;">
+    <p style="margin: 0 0 6px 0; color: #555; font-size: 11px; font-weight: bold;">
+        📷 {block_id} ({kind})
+    </p>
+    <a href="{url}">
+        <img src="{data_url}" width="400" style="max-width: 100%; border: 1px solid #ccc; border-radius: 4px;"/>
+    </a>
+</div>
+'''
                 cursor.insertHtml(html)
                 self.messages_area.setTextCursor(cursor)
                 self.messages_area.ensureCursorVisible()
                 
-                # Сохраняем изображение локально
-                if self.current_chat_id:
-                    config = get_config_manager()
-                    config.save_chat_image(
-                        self.current_chat_id,
-                        img_bytes,
-                        f"{block_id}_{kind}"
-                    )
         except Exception as e:
             logger.error(f"Error loading image {url}: {e}")
             # Вставляем ссылку вместо изображения
