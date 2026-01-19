@@ -63,6 +63,12 @@ class StreamWorker(QThread):
     error_occurred = pyqtSignal(str)
     file_uploaded = pyqtSignal(str, str)  # filename, google_uri
     completed = pyqtSignal()
+    # Новые сигналы для полного логирования
+    sse_event = pyqtSignal(str, dict)  # event_type, data
+    tool_called = pyqtSignal(str, str, dict)  # tool_name, reason, parameters
+    llm_final_received = pyqtSignal(str)  # final content
+    thinking_received = pyqtSignal(str)  # thinking content
+    image_ready = pyqtSignal(dict)  # image data: block_id, kind, url, reason
     
     def __init__(
         self,
@@ -118,6 +124,9 @@ class StreamWorker(QThread):
                 if self._stop_requested:
                     break
                 
+                # Отправляем все события для логирования
+                self.sse_event.emit(event.event, event.data)
+                
                 if event.event == "llm_token":
                     token = event.data.get("token", "")
                     if token:
@@ -127,14 +136,27 @@ class StreamWorker(QThread):
                     phase = event.data.get("phase", "")
                     desc = event.data.get("description", "")
                     self.phase_started.emit(phase, desc)
+                elif event.event == "tool_call":
+                    tool = event.data.get("tool", "unknown")
+                    reason = event.data.get("reason", "")
+                    params = event.data.get("parameters", {})
+                    self.tool_called.emit(tool, reason, params)
+                elif event.event == "llm_thinking":
+                    content = event.data.get("content", "")
+                    if content:
+                        self.thinking_received.emit(content)
+                elif event.event == "image_ready":
+                    self.image_ready.emit(event.data)
                 elif event.event == "llm_final":
                     content = event.data.get("content", "")
+                    self.llm_final_received.emit(content)
                     if content and not self._received_tokens:
                         self.token_received.emit(content)
                 elif event.event == "error":
                     msg = event.data.get("message", "Unknown error")
                     self.error_occurred.emit(msg)
             
+            self.sse_event.emit("completed", {})
             self.completed.emit()
         except Exception as e:
             self.error_occurred.emit(str(e))
@@ -153,13 +175,19 @@ class LoginDialog(QDialog):
         
         layout = QVBoxLayout(self)
         
+        config = get_config_manager()
+        saved_creds = config.load_static_token()
+        
         # Server
         server_group = QGroupBox("Сервер")
         server_layout = QVBoxLayout(server_group)
         self.server_edit = QLineEdit()
         self.server_edit.setPlaceholderText("http://localhost:8000")
-        config = get_config_manager().get_config()
-        self.server_edit.setText(config.server_url)
+        # Используем сохранённый URL или из конфига
+        if saved_creds and saved_creds.get("server_url"):
+            self.server_edit.setText(saved_creds["server_url"])
+        else:
+            self.server_edit.setText(config.get_config().server_url)
         server_layout.addWidget(self.server_edit)
         layout.addWidget(server_group)
         
@@ -169,6 +197,9 @@ class LoginDialog(QDialog):
         self.token_edit = QLineEdit()
         self.token_edit.setPlaceholderText("Введите ваш статичный токен")
         self.token_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        # Предзаполняем сохранённый токен
+        if saved_creds and saved_creds.get("static_token"):
+            self.token_edit.setText(saved_creds["static_token"])
         token_layout.addWidget(self.token_edit)
         
         self.show_token_btn = QPushButton("👁")
@@ -351,6 +382,9 @@ class SettingsDialog(QDialog):
 class ChatWidget(QWidget):
     """Chat widget with messages."""
     
+    # Сигнал при изменении модели
+    model_changed = pyqtSignal(str)
+    
     def __init__(self, parent=None):
         super().__init__(parent)
         self.client: Optional[AIZoomDocClient] = None
@@ -358,11 +392,28 @@ class ChatWidget(QWidget):
         self.worker: Optional[StreamWorker] = None
         self.attachments_provider = None
         self.attached_files: List[dict] = []  # List of attached files
+        self._accumulated_response = ""  # Для локального сохранения ответа
         self._setup_ui()
     
     def _setup_ui(self):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(5, 5, 5, 5)
+        
+        # Top bar with model selector
+        top_bar = QHBoxLayout()
+        top_bar.setContentsMargins(0, 0, 0, 5)
+        
+        top_bar.addWidget(QLabel("Режим:"))
+        self.model_combo = QComboBox()
+        self.model_combo.addItem("⚡ Простой (Flash)", "simple")
+        self.model_combo.addItem("🧠 Сложный (Flash + Pro)", "complex")
+        self.model_combo.setMinimumWidth(180)
+        self.model_combo.setToolTip("Простой: быстрый ответ одной моделью\nСложный: двухэтапный анализ с более качественным результатом")
+        self.model_combo.currentIndexChanged.connect(self._on_model_changed)
+        top_bar.addWidget(self.model_combo)
+        
+        top_bar.addStretch()
+        layout.addLayout(top_bar)
         
         # Messages area
         self.messages_area = QTextBrowser()
@@ -464,19 +515,51 @@ class ChatWidget(QWidget):
         except Exception as e:
             logger.error(f"Error loading history: {e}")
     
-    def _append_message(self, role: str, content: str, images: list = None):
+    def _append_message(self, role: str, content: str, images: list = None, model_name: str = None):
         cursor = self.messages_area.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.End)
         
         if role == "user":
-            html = f'<p style="color: #0066cc; margin: 10px 0;"><b>Вы:</b></p>'
-            html += f'<p style="margin: 5px 0 15px 20px; white-space: pre-wrap;">{content}</p>'
+            # Сообщение пользователя — справа, серый фон, скруглённые углы
+            html = f'''
+            <table width="100%" cellpadding="0" cellspacing="0" style="margin: 10px 0;">
+                <tr>
+                    <td width="20%"></td>
+                    <td width="80%" align="right">
+                        <div style="background: #e0e0e0; color: #333; 
+                                    padding: 12px 16px; 
+                                    border-radius: 18px 18px 4px 18px; 
+                                    text-align: right;">
+                            <b style="font-size: 9px; color: #666; display: block; margin-bottom: 4px;">Пользователь</b>
+                            <span style="white-space: pre-wrap;">{content}</span>
+                        </div>
+                    </td>
+                </tr>
+            </table>
+            '''
         elif role == "assistant":
-            html = f'<p style="color: #009933; margin: 10px 0;"><b>Ассистент:</b></p>'
+            # Сообщение LLM — слева, белый фон с рамкой, скруглённые углы
             formatted = content.replace('\n', '<br>')
-            html += f'<p style="margin: 5px 0 15px 20px;">{formatted}</p>'
+            # Определяем название модели
+            llm_label = model_name if model_name else self._get_current_model_label()
+            html = f'''
+            <table width="100%" cellpadding="0" cellspacing="0" style="margin: 10px 0;">
+                <tr>
+                    <td width="80%" align="left">
+                        <div style="background: #ffffff; color: #333; 
+                                    padding: 12px 16px; 
+                                    border-radius: 18px 18px 18px 4px; 
+                                    border: 1px solid #e0e0e0; text-align: left;">
+                            <b style="font-size: 9px; color: #009933; display: block; margin-bottom: 4px;">{llm_label}</b>
+                            {formatted}
+                        </div>
+                    </td>
+                    <td width="20%"></td>
+                </tr>
+            </table>
+            '''
         else:
-            html = f'<p style="color: #666;">{content}</p>'
+            html = f'<p style="color: #666; text-align: center; font-style: italic;">{content}</p>'
         
         # Добавляем изображения
         if images:
@@ -493,10 +576,20 @@ class ChatWidget(QWidget):
                         if response.status_code == 200:
                             content_type = response.headers.get('content-type', '')
                             if content_type.startswith('image/'):
-                                img_data = base64.b64encode(response.content).decode('utf-8')
+                                img_bytes = response.content
+                                img_data = base64.b64encode(img_bytes).decode('utf-8')
                                 data_url = f"data:{content_type};base64,{img_data}"
                                 html += f'<p><a href="{url}"><img src="{data_url}" width="400" style="max-width: 100%; border: 1px solid #ccc; margin: 5px 0;"/></a>'
                                 html += f'<br/><small style="color: #666;">{img_type}</small></p>'
+                                
+                                # Сохранить изображение локально
+                                if self.current_chat_id:
+                                    config = get_config_manager()
+                                    config.save_chat_image(
+                                        self.current_chat_id,
+                                        img_bytes,
+                                        img_type or "image"
+                                    )
                             else:
                                 html += f'<p><a href="{url}">[Файл: {img_type}]</a></p>'
                         else:
@@ -544,9 +637,28 @@ class ChatWidget(QWidget):
         self.status_label.setText("⏳ Диалог с LLM активен...")
         self.status_label.setVisible(True)
         
+        # Сброс накопленного ответа
+        self._accumulated_response = ""
+        
+        # Сохранить сообщение пользователя локально
+        if self.current_chat_id:
+            config = get_config_manager()
+            config.save_chat_message(self.current_chat_id, "user", message)
+        
         cursor = self.messages_area.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.End)
-        cursor.insertHtml('<p style="color: #009933; margin: 10px 0;"><b>Ассистент:</b></p><p style="margin: 5px 0 15px 20px;">')
+        # Начало ответа LLM (слева, белый фон, скруглённые углы)
+        llm_label = self._get_current_model_label()
+        cursor.insertHtml(f'''
+        <table width="100%" cellpadding="0" cellspacing="0" style="margin: 10px 0;">
+            <tr>
+                <td width="80%" align="left">
+                    <div style="background: #ffffff; color: #333; 
+                                padding: 12px 16px; 
+                                border-radius: 18px 18px 18px 4px; 
+                                border: 1px solid #e0e0e0; text-align: left;">
+                        <b style="font-size: 9px; color: #009933; display: block; margin-bottom: 4px;">{llm_label}</b>
+        ''')
         self.messages_area.setTextCursor(cursor)
         
         # Collect document IDs from attachments
@@ -581,7 +693,28 @@ class ChatWidget(QWidget):
         self.worker.phase_started.connect(self._on_phase)
         self.worker.error_occurred.connect(self._on_error)
         self.worker.completed.connect(self._on_completed)
+        # Новые сигналы для полного логирования
+        self.worker.sse_event.connect(self._on_sse_event)
+        self.worker.tool_called.connect(self._on_tool_call)
+        self.worker.llm_final_received.connect(self._on_llm_final)
+        self.worker.file_uploaded.connect(self._on_file_uploaded)
+        self.worker.thinking_received.connect(self._on_thinking)
+        self.worker.image_ready.connect(self._on_image_ready)
         self.worker.start()
+        
+        # Логируем запрос пользователя с контекстом
+        if self.current_chat_id:
+            config = get_config_manager()
+            config.log_sse_event(
+                self.current_chat_id,
+                "user_request",
+                {
+                    "message": message,
+                    "document_ids": document_ids,
+                    "local_files": local_files,
+                    "client_id": client_id
+                }
+            )
         
         # Clear attachments after sending
         self._clear_attachments()
@@ -592,6 +725,8 @@ class ChatWidget(QWidget):
         cursor.insertText(token)
         self.messages_area.setTextCursor(cursor)
         self.messages_area.ensureCursorVisible()
+        # Накапливаем ответ для локального сохранения
+        self._accumulated_response += token
     
     def _on_phase(self, phase: str, desc: str):
         self.status_label.setStyleSheet(self._status_active_style)
@@ -682,7 +817,200 @@ class ChatWidget(QWidget):
         self.send_btn.setEnabled(True)
         cursor = self.messages_area.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.End)
-        cursor.insertHtml('</p>')
+        # Закрываем блок ответа LLM
+        cursor.insertHtml('''
+                    </div>
+                </td>
+                <td width="20%"></td>
+            </tr>
+        </table>
+        ''')
+        self.messages_area.setTextCursor(cursor)
+        self.messages_area.ensureCursorVisible()
+        
+        # Сохранить ответ ассистента локально
+        if self._accumulated_response and self.current_chat_id:
+            config = get_config_manager()
+            config.save_chat_message(
+                self.current_chat_id,
+                "assistant",
+                self._accumulated_response
+            )
+        self._accumulated_response = ""
+    
+    def _on_model_changed(self):
+        """Изменение режима модели (сохраняется на сервере)."""
+        if not self.client:
+            return
+        
+        new_profile = self.model_combo.currentData()
+        try:
+            self.client.update_settings(model_profile=new_profile)
+            self.model_changed.emit(new_profile)
+            logger.info(f"Model profile changed to: {new_profile}")
+        except Exception as e:
+            logger.error(f"Error updating model profile: {e}")
+            QMessageBox.warning(self, "Ошибка", f"Не удалось сменить режим модели: {e}")
+    
+    def _on_sse_event(self, event_type: str, data: dict):
+        """Логировать SSE-событие в локальный файл."""
+        if self.current_chat_id:
+            config = get_config_manager()
+            config.log_sse_event(self.current_chat_id, event_type, data)
+    
+    def _on_tool_call(self, tool: str, reason: str, params: dict):
+        """Обработка запроса инструмента от LLM (request_images, zoom)."""
+        # Отображаем в статусе
+        self.status_label.setStyleSheet(self._status_active_style)
+        if tool == "request_images":
+            self.status_label.setText(f"🖼️ Запрос изображений: {reason[:50]}...")
+        elif tool == "zoom":
+            self.status_label.setText(f"🔍 Zoom (детализация): {reason[:50]}...")
+        else:
+            self.status_label.setText(f"🔧 {tool}: {reason[:50]}...")
+        
+        # Отображаем запрос на картинки в чате
+        cursor = self.messages_area.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        
+        if tool == "request_images":
+            block_ids = params.get("block_ids", [])
+            html = f'''
+            <div style="margin: 5px 20px; padding: 5px; background: #e8f4fc; border-left: 3px solid #0066cc; font-size: 11px;">
+                <b>🖼️ LLM запрашивает изображения:</b><br/>
+                <span style="color: #666;">{reason}</span><br/>
+                <code>{", ".join(block_ids) if block_ids else "..."}</code>
+            </div>
+            '''
+            cursor.insertHtml(html)
+        elif tool == "zoom":
+            block_id = params.get("block_id", "")
+            bbox = params.get("bbox_norm", [])
+            html = f'''
+            <div style="margin: 5px 20px; padding: 5px; background: #fff8e8; border-left: 3px solid #ff9900; font-size: 11px;">
+                <b>🔍 LLM запрашивает детализацию:</b><br/>
+                <span style="color: #666;">{reason}</span><br/>
+                <code>{block_id}</code> → bbox: {bbox}
+            </div>
+            '''
+            cursor.insertHtml(html)
+        
+        self.messages_area.setTextCursor(cursor)
+        self.messages_area.ensureCursorVisible()
+    
+    def _on_llm_final(self, content: str):
+        """Получен финальный ответ LLM (для логирования)."""
+        # Уже логируется через _on_sse_event
+        pass
+    
+    def _on_file_uploaded(self, filename: str, uri: str):
+        """Файл загружен в Google File API."""
+        self.status_label.setText(f"📎 Загружен: {filename}")
+        if self.current_chat_id:
+            config = get_config_manager()
+            config.log_sse_event(
+                self.current_chat_id,
+                "file_uploaded",
+                {"filename": filename, "uri": uri}
+            )
+    
+    def _on_thinking(self, content: str):
+        """Получен фрагмент thinking (размышлений) от LLM."""
+        # Отображаем в статусе что идёт размышление
+        self.status_label.setStyleSheet(self._status_active_style)
+        self.status_label.setText("💭 LLM размышляет...")
+        
+        # Логируем thinking
+        if self.current_chat_id:
+            config = get_config_manager()
+            config.log_sse_event(
+                self.current_chat_id,
+                "thinking",
+                {"content": content}
+            )
+    
+    def _on_image_ready(self, data: dict):
+        """Изображение готово - отобразить в чате."""
+        block_id = data.get("block_id", "")
+        kind = data.get("kind", "preview")
+        url = data.get("url", "")
+        reason = data.get("reason", "")
+        
+        if not url:
+            return
+        
+        # Обновляем статус
+        self.status_label.setText(f"🖼️ Получено изображение: {block_id} ({kind})")
+        
+        # Добавляем изображение в чат
+        cursor = self.messages_area.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        
+        try:
+            import httpx
+            import base64
+            
+            response = httpx.get(url, timeout=15.0)
+            if response.status_code == 200:
+                content_type = response.headers.get('content-type', 'image/png')
+                img_bytes = response.content
+                img_data = base64.b64encode(img_bytes).decode('utf-8')
+                data_url = f"data:{content_type};base64,{img_data}"
+                
+                # Вставляем HTML с изображением
+                html = f'''
+                <div style="margin: 5px 20px; padding: 5px; background: #f5f5f5; border: 1px solid #ddd; border-radius: 4px;">
+                    <p style="margin: 0 0 5px 0; color: #666; font-size: 10px;">
+                        📷 {block_id} ({kind}) - {reason}
+                    </p>
+                    <a href="{url}">
+                        <img src="{data_url}" width="350" style="max-width: 100%; border: 1px solid #ccc;"/>
+                    </a>
+                </div>
+                '''
+                cursor.insertHtml(html)
+                self.messages_area.setTextCursor(cursor)
+                self.messages_area.ensureCursorVisible()
+                
+                # Сохраняем изображение локально
+                if self.current_chat_id:
+                    config = get_config_manager()
+                    config.save_chat_image(
+                        self.current_chat_id,
+                        img_bytes,
+                        f"{block_id}_{kind}"
+                    )
+        except Exception as e:
+            logger.error(f"Error loading image {url}: {e}")
+            # Вставляем ссылку вместо изображения
+            cursor.insertHtml(f'<p style="color: #666;"><a href="{url}">🖼️ {block_id} ({kind})</a></p>')
+            self.messages_area.setTextCursor(cursor)
+    
+    def load_model_setting(self):
+        """Загрузить текущий режим модели с сервера."""
+        if not self.client:
+            return
+        
+        try:
+            user_info = self.client.get_me()
+            profile = user_info.settings.model_profile
+            idx = self.model_combo.findData(profile)
+            if idx >= 0:
+                # Блокируем сигнал, чтобы не отправлять update на сервер
+                self.model_combo.blockSignals(True)
+                self.model_combo.setCurrentIndex(idx)
+                self.model_combo.blockSignals(False)
+        except Exception as e:
+            logger.error(f"Error loading model setting: {e}")
+    
+    def _get_current_model_label(self) -> str:
+        """Получить название текущей модели для отображения."""
+        profile = self.model_combo.currentData()
+        if profile == "simple":
+            return "Gemini Flash"
+        elif profile == "complex":
+            return "Gemini Pro"
+        return "LLM"
 
 
 class LeftPanel(QWidget):
@@ -978,6 +1306,12 @@ class MainWindow(QMainWindow):
         settings_action.triggered.connect(self._show_settings)
         settings_menu.addAction(settings_action)
         
+        settings_menu.addSeparator()
+        
+        folder_action = QAction("Выбор папки для данных...", self)
+        folder_action.triggered.connect(self._choose_data_folder)
+        settings_menu.addAction(folder_action)
+        
         help_menu = menubar.addMenu("Справка")
         about_action = QAction("О программе", self)
         about_action.triggered.connect(self._show_about)
@@ -1004,6 +1338,7 @@ class MainWindow(QMainWindow):
         self.chat_widget = ChatWidget()
         self.chat_widget.attachments_provider = self._get_message_context
         self.chat_widget.on_chat_created = self._on_new_chat_created
+        self.chat_widget.model_changed.connect(self._on_model_changed)
         splitter.addWidget(self.chat_widget)
         
         splitter.setSizes([300, 900])
@@ -1016,16 +1351,33 @@ class MainWindow(QMainWindow):
     
     def _try_auto_login(self):
         config = get_config_manager()
+        
+        # Сначала проверяем JWT токен
         if config.is_token_valid():
             try:
                 self.client = AIZoomDocClient()
                 user_info = self.client.get_me()
                 self._on_login_success(user_info)
+                return
             except Exception as e:
-                logger.info(f"Auto-login failed: {e}")
-                self._show_login()
-        else:
-            self._show_login()
+                logger.info(f"Auto-login with JWT failed: {e}")
+        
+        # Пробуем загрузить сохранённый статичный токен из локальной папки
+        saved_creds = config.load_static_token()
+        if saved_creds:
+            try:
+                self.client = AIZoomDocClient(
+                    server_url=saved_creds["server_url"],
+                    static_token=saved_creds["static_token"]
+                )
+                self.client.authenticate()
+                user_info = self.client.get_me()
+                self._on_login_success(user_info)
+                return
+            except Exception as e:
+                logger.info(f"Auto-login with saved token failed: {e}")
+        
+        self._show_login()
     
     def _show_login(self):
         dialog = LoginDialog(self)
@@ -1048,6 +1400,11 @@ class MainWindow(QMainWindow):
                 )
                 self.client.authenticate()
                 user_info = self.client.get_me()
+                
+                # Сохраняем статичный токен в локальную папку
+                config = get_config_manager()
+                config.save_static_token(token, server_url)
+                
                 self._on_login_success(user_info)
                 break
             except AuthenticationError as e:
@@ -1063,12 +1420,19 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("Подключено")
         self.user_label.setText(f"{username} | {user_info.settings.model_profile}")
         
+        # Загрузить текущий режим модели в селектор
+        self.chat_widget.load_model_setting()
+        
         self.left_panel.load_chats()
     
     def _logout(self):
         if self.client:
             self.client.logout()
             self.client = None
+        
+        # Очищаем сохранённый токен
+        config = get_config_manager()
+        config.clear_static_token()
         
         self.left_panel.chat_list.clear()
         self.left_panel.tree_widget.clear()
@@ -1128,6 +1492,42 @@ class MainWindow(QMainWindow):
         self.chat_widget.clear_for_new_chat()
         # Снимаем выделение в списке чатов
         self.left_panel.chat_list.clearSelection()
+    
+    def _choose_data_folder(self):
+        """Выбор папки для локального сохранения данных (чаты, картинки)."""
+        from PyQt6.QtWidgets import QFileDialog
+        
+        config = get_config_manager()
+        current_dir = str(config.get_data_dir())
+        
+        folder = QFileDialog.getExistingDirectory(
+            self,
+            "Выберите папку для локальных данных",
+            current_dir,
+            QFileDialog.Option.ShowDirsOnly
+        )
+        
+        if folder:
+            config.set_data_dir(folder)
+            QMessageBox.information(
+                self,
+                "Папка выбрана",
+                f"Локальные данные будут сохраняться в:\n{folder}\n\n"
+                "Структура папок:\n"
+                "  └─ chats/<chat_id>/\n"
+                "      ├─ chat.log (лог сообщений)\n"
+                "      └─ crops/ (изображения)"
+            )
+    
+    def _on_model_changed(self, new_profile: str):
+        """Обновить отображение режима модели в статусбаре."""
+        if self.client:
+            try:
+                user_info = self.client.get_me()
+                username = fix_mojibake(user_info.user.username)
+                self.user_label.setText(f"{username} | {new_profile}")
+            except:
+                pass
 
 
 def run_gui():

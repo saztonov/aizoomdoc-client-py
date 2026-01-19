@@ -117,8 +117,10 @@ class StreamEvent(BaseModel):
         "phase_started",
         "phase_progress",
         "llm_token",
+        "llm_thinking",
         "llm_final",
         "tool_call",
+        "image_ready",
         "error",
         "completed"
     ]
@@ -236,4 +238,8 @@ class ClientConfig(BaseModel):
     server_url: str
     token_data: Optional[TokenData] = None
     active_chat_id: Optional[UUID] = None
+    data_dir: Optional[str] = Field(
+        default=None,
+        description="Папка для локальных данных (логи чатов, изображения). None = ~/.aizoomdoc/data"
+    )
 

@@ -6,12 +6,16 @@
 
 import json
 import os
+import shutil
+import logging
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List, Dict, Any
 from uuid import UUID
 
 from aizoomdoc_client.models import ClientConfig, TokenData
+
+logger = logging.getLogger(__name__)
 
 
 class ConfigManager:
@@ -57,7 +61,8 @@ class ConfigManager:
             self._config = ClientConfig(
                 server_url="http://localhost:8000",
                 token_data=None,
-                active_chat_id=None
+                active_chat_id=None,
+                data_dir=None
             )
             return self._config
         
@@ -84,7 +89,8 @@ class ConfigManager:
             self._config = ClientConfig(
                 server_url="http://localhost:8000",
                 token_data=None,
-                active_chat_id=None
+                active_chat_id=None,
+                data_dir=None
             )
             return self._config
     
@@ -108,7 +114,8 @@ class ConfigManager:
         data = {
             "server_url": self._config.server_url,
             "token_data": None,
-            "active_chat_id": str(self._config.active_chat_id) if self._config.active_chat_id else None
+            "active_chat_id": str(self._config.active_chat_id) if self._config.active_chat_id else None,
+            "data_dir": self._config.data_dir
         }
         
         if self._config.token_data:
@@ -220,9 +227,317 @@ class ConfigManager:
         self._config = ClientConfig(
             server_url=self.get_config().server_url,
             token_data=None,
-            active_chat_id=None
+            active_chat_id=None,
+            data_dir=self.get_config().data_dir
         )
         self.save()
+    
+    # ===== DATA DIR METHODS =====
+    
+    def set_data_dir(self, path: Optional[str]) -> None:
+        """
+        Установить папку для локальных данных.
+        
+        Args:
+            path: Путь к папке или None для сброса к умолчанию
+        """
+        config = self.get_config()
+        config.data_dir = path
+        self.save(config)
+    
+    # ===== STATIC TOKEN METHODS =====
+    
+    def save_static_token(self, token: str, server_url: str) -> None:
+        """
+        Сохранить статичный токен в локальный файл.
+        
+        Файл сохраняется в папке данных (data_dir) для безопасного хранения.
+        
+        Args:
+            token: Статичный токен
+            server_url: URL сервера
+        """
+        try:
+            data_dir = self.get_data_dir()
+            token_file = data_dir / "credentials.json"
+            
+            credentials = {
+                "static_token": token,
+                "server_url": server_url,
+                "saved_at": datetime.now().isoformat()
+            }
+            
+            with open(token_file, "w", encoding="utf-8") as f:
+                json.dump(credentials, f, indent=2, ensure_ascii=False)
+            
+            logger.info(f"Static token saved to: {token_file}")
+        except Exception as e:
+            logger.error(f"Error saving static token: {e}")
+    
+    def load_static_token(self) -> Optional[Dict[str, str]]:
+        """
+        Загрузить статичный токен из локального файла.
+        
+        Returns:
+            Dict с 'static_token' и 'server_url' или None если не найден
+        """
+        try:
+            data_dir = self.get_data_dir()
+            token_file = data_dir / "credentials.json"
+            
+            if not token_file.exists():
+                return None
+            
+            with open(token_file, "r", encoding="utf-8") as f:
+                credentials = json.load(f)
+            
+            if credentials.get("static_token") and credentials.get("server_url"):
+                return {
+                    "static_token": credentials["static_token"],
+                    "server_url": credentials["server_url"]
+                }
+            return None
+        except Exception as e:
+            logger.error(f"Error loading static token: {e}")
+            return None
+    
+    def clear_static_token(self) -> None:
+        """Удалить сохранённый статичный токен."""
+        try:
+            data_dir = self.get_data_dir()
+            token_file = data_dir / "credentials.json"
+            
+            if token_file.exists():
+                token_file.unlink()
+                logger.info("Static token file removed")
+        except Exception as e:
+            logger.error(f"Error clearing static token: {e}")
+    
+    def get_data_dir(self) -> Path:
+        """
+        Получить папку для локальных данных.
+        
+        Returns:
+            Path к папке данных (создаётся если не существует)
+        """
+        config = self.get_config()
+        if config.data_dir:
+            data_path = Path(config.data_dir)
+        else:
+            data_path = self.config_dir / "data"
+        
+        data_path.mkdir(parents=True, exist_ok=True)
+        return data_path
+    
+    def get_chat_dir(self, chat_id: str) -> Path:
+        """
+        Получить папку для конкретного чата.
+        
+        Args:
+            chat_id: ID чата
+        
+        Returns:
+            Path к папке чата
+        """
+        chat_path = self.get_data_dir() / "chats" / chat_id
+        chat_path.mkdir(parents=True, exist_ok=True)
+        return chat_path
+    
+    def get_crops_dir(self, chat_id: str) -> Path:
+        """
+        Получить папку для изображений чата.
+        
+        Args:
+            chat_id: ID чата
+        
+        Returns:
+            Path к папке crops
+        """
+        crops_path = self.get_chat_dir(chat_id) / "crops"
+        crops_path.mkdir(parents=True, exist_ok=True)
+        return crops_path
+    
+    def save_chat_message(
+        self,
+        chat_id: str,
+        role: str,
+        content: str,
+        images: Optional[List[Dict[str, Any]]] = None
+    ) -> None:
+        """
+        Сохранить сообщение чата в лог-файл.
+        
+        Args:
+            chat_id: ID чата
+            role: Роль (user/assistant)
+            content: Текст сообщения
+            images: Список изображений (опционально)
+        """
+        try:
+            chat_dir = self.get_chat_dir(chat_id)
+            log_file = chat_dir / "chat.log"
+            
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            
+            with open(log_file, "a", encoding="utf-8") as f:
+                f.write(f"\n{'='*60}\n")
+                f.write(f"[{timestamp}] {role.upper()}\n")
+                f.write(f"{'='*60}\n")
+                f.write(content)
+                f.write("\n")
+                
+                if images:
+                    f.write(f"\n--- Изображения ({len(images)}) ---\n")
+                    for img in images:
+                        img_type = img.get("image_type", "unknown")
+                        url = img.get("url", "")
+                        local_path = img.get("local_path", "")
+                        f.write(f"  - {img_type}: {local_path or url}\n")
+                
+        except Exception as e:
+            logger.error(f"Error saving chat message: {e}")
+    
+    def log_sse_event(
+        self,
+        chat_id: str,
+        event_type: str,
+        data: Dict[str, Any]
+    ) -> None:
+        """
+        Записать SSE-событие в детальный лог.
+        
+        Логирует все события: phase_started, tool_call, llm_token, llm_final, error, completed.
+        
+        Args:
+            chat_id: ID чата
+            event_type: Тип события (phase_started, tool_call, etc.)
+            data: Данные события
+        """
+        try:
+            chat_dir = self.get_chat_dir(chat_id)
+            log_file = chat_dir / "full_dialog.log"
+            
+            timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+            
+            with open(log_file, "a", encoding="utf-8") as f:
+                if event_type == "phase_started":
+                    phase = data.get("phase", "")
+                    desc = data.get("description", "")
+                    f.write(f"\n[{timestamp}] ====== PHASE: {phase} ======\n")
+                    f.write(f"  {desc}\n")
+                    
+                elif event_type == "tool_call":
+                    tool = data.get("tool", "unknown")
+                    reason = data.get("reason", "")
+                    params = data.get("parameters", {})
+                    f.write(f"\n[{timestamp}] >>> TOOL CALL: {tool}\n")
+                    f.write(f"  Причина: {reason}\n")
+                    if params:
+                        f.write(f"  Параметры: {json.dumps(params, ensure_ascii=False, indent=4)}\n")
+                    
+                elif event_type == "llm_token":
+                    # Токены записываем компактно, без новой строки
+                    token = data.get("token", "")
+                    # Записываем только в отдельный файл токенов (накопительно в памяти)
+                    pass  # Токены накапливаются в StreamWorker и записываются в llm_final
+                    
+                elif event_type == "llm_final":
+                    content = data.get("content", "")
+                    if content:
+                        f.write(f"\n[{timestamp}] <<< LLM FINAL RESPONSE\n")
+                        f.write(f"{'-'*40}\n")
+                        f.write(content)
+                        f.write(f"\n{'-'*40}\n")
+                    
+                elif event_type == "thinking":
+                    # Размышления модели (если поддерживается)
+                    content = data.get("content", "")
+                    if content:
+                        f.write(f"\n[{timestamp}] 💭 THINKING\n")
+                        f.write(f"{content}\n")
+                    
+                elif event_type == "error":
+                    message = data.get("message", "")
+                    f.write(f"\n[{timestamp}] ❌ ERROR: {message}\n")
+                    
+                elif event_type == "completed":
+                    f.write(f"\n[{timestamp}] ✅ COMPLETED\n")
+                    f.write(f"{'='*60}\n")
+                    
+                elif event_type == "user_request":
+                    # Запрос пользователя с контекстом
+                    message = data.get("message", "")
+                    docs = data.get("document_ids", [])
+                    files = data.get("local_files", [])
+                    f.write(f"\n[{timestamp}] 👤 USER REQUEST\n")
+                    f.write(f"{'='*60}\n")
+                    f.write(f"Сообщение: {message}\n")
+                    if docs:
+                        f.write(f"Документы: {docs}\n")
+                    if files:
+                        f.write(f"Локальные файлы: {files}\n")
+                    
+                elif event_type == "file_uploaded":
+                    filename = data.get("filename", "")
+                    uri = data.get("uri", "")
+                    f.write(f"\n[{timestamp}] 📎 FILE UPLOADED: {filename}\n")
+                    f.write(f"  URI: {uri}\n")
+                    
+                else:
+                    # Прочие события
+                    f.write(f"\n[{timestamp}] [{event_type}] {json.dumps(data, ensure_ascii=False)}\n")
+                    
+        except Exception as e:
+            logger.error(f"Error logging SSE event: {e}")
+    
+    def save_chat_image(
+        self,
+        chat_id: str,
+        image_data: bytes,
+        image_type: str,
+        filename: Optional[str] = None
+    ) -> Optional[str]:
+        """
+        Сохранить изображение в папку crops чата.
+        
+        Args:
+            chat_id: ID чата
+            image_data: Байты изображения
+            image_type: Тип изображения (для имени файла)
+            filename: Имя файла (опционально, генерируется автоматически)
+        
+        Returns:
+            Путь к сохранённому файлу или None при ошибке
+        """
+        try:
+            crops_dir = self.get_crops_dir(chat_id)
+            
+            if not filename:
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+                # Определяем расширение по типу
+                ext = ".png"
+                if image_type:
+                    if "jpeg" in image_type.lower() or "jpg" in image_type.lower():
+                        ext = ".jpg"
+                    elif "png" in image_type.lower():
+                        ext = ".png"
+                    elif "gif" in image_type.lower():
+                        ext = ".gif"
+                    elif "webp" in image_type.lower():
+                        ext = ".webp"
+                filename = f"{image_type}_{timestamp}{ext}"
+            
+            file_path = crops_dir / filename
+            
+            with open(file_path, "wb") as f:
+                f.write(image_data)
+            
+            logger.info(f"Saved image: {file_path}")
+            return str(file_path)
+            
+        except Exception as e:
+            logger.error(f"Error saving chat image: {e}")
+            return None
 
 
 # Глобальный экземпляр менеджера конфигурации
