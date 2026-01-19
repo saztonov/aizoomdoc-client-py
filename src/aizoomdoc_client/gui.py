@@ -23,7 +23,7 @@ from PyQt6.QtWidgets import (
     QMenuBar, QMenu, QDialog, QDialogButtonBox, QMessageBox,
     QGroupBox, QSizePolicy, QTabWidget, QTextBrowser, QStackedWidget,
     QStatusBar, QToolBar, QTreeWidget, QTreeWidgetItem, QButtonGroup,
-    QDoubleSpinBox, QSpinBox, QFormLayout, QCheckBox
+    QDoubleSpinBox, QSpinBox, QFormLayout, QCheckBox, QStyle
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QSize, QTimer, QUrl, QByteArray
 from PyQt6.QtGui import QFont, QAction, QTextCursor, QIcon, QColor, QPixmap, QImage
@@ -1020,6 +1020,7 @@ class LeftPanel(QWidget):
     
     chat_selected = pyqtSignal(str)  # chat_id
     new_chat_requested = pyqtSignal()
+    chat_delete_requested = pyqtSignal(str)  # chat_id для удаления
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1069,6 +1070,9 @@ class LeftPanel(QWidget):
         
         self.chat_list = QListWidget()
         self.chat_list.itemClicked.connect(self._on_chat_clicked)
+        # Контекстное меню для удаления чата
+        self.chat_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.chat_list.customContextMenuRequested.connect(self._on_chat_context_menu)
         chats_layout.addWidget(self.chat_list, 1)
         
         self.stack.addWidget(chats_page)
@@ -1119,6 +1123,29 @@ class LeftPanel(QWidget):
         chat_id = item.data(Qt.ItemDataRole.UserRole)
         if chat_id:
             self.chat_selected.emit(chat_id)
+    
+    def _on_chat_context_menu(self, position):
+        """Контекстное меню для списка чатов."""
+        item = self.chat_list.itemAt(position)
+        if not item:
+            return
+        
+        chat_id = item.data(Qt.ItemDataRole.UserRole)
+        if not chat_id:
+            return
+        
+        menu = QMenu(self)
+        delete_action = menu.addAction("Удалить")
+        delete_action.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_TrashIcon))
+        
+        action = menu.exec(self.chat_list.mapToGlobal(position))
+        
+        if action == delete_action:
+            # Удаляем из списка сразу
+            row = self.chat_list.row(item)
+            self.chat_list.takeItem(row)
+            # Отправляем сигнал для удаления на сервере и локально
+            self.chat_delete_requested.emit(chat_id)
     
     def load_chats(self):
         if not self.client:
@@ -1334,6 +1361,7 @@ class MainWindow(QMainWindow):
         self.left_panel.setMaximumWidth(400)
         self.left_panel.chat_selected.connect(self._on_chat_selected)
         self.left_panel.new_chat_requested.connect(self._create_new_chat)
+        self.left_panel.chat_delete_requested.connect(self._on_chat_delete)
         splitter.addWidget(self.left_panel)
         
         # Chat widget
@@ -1470,6 +1498,27 @@ class MainWindow(QMainWindow):
     
     def _on_chat_selected(self, chat_id: str):
         self.chat_widget.set_chat(chat_id)
+    
+    def _on_chat_delete(self, chat_id: str):
+        """Удалить чат - отправить на сервер и удалить локальные файлы."""
+        if not self.client:
+            return
+        
+        # Если это текущий чат - очистить виджет
+        if self.chat_widget.current_chat_id == chat_id:
+            self.chat_widget.clear_for_new_chat()
+        
+        # Отправить запрос на сервер (асинхронно)
+        try:
+            from uuid import UUID
+            self.client.delete_chat(UUID(chat_id))
+            logger.info(f"Chat deletion requested: {chat_id}")
+        except Exception as e:
+            logger.error(f"Error requesting chat deletion: {e}")
+        
+        # Удалить локальные файлы
+        config = get_config_manager()
+        config.delete_chat_data(chat_id)
     
     def _on_new_chat_created(self, chat_id: str, title: str):
         """Добавить новый чат в список после его создания."""

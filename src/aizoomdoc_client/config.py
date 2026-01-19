@@ -357,6 +357,39 @@ class ConfigManager:
         crops_path.mkdir(parents=True, exist_ok=True)
         return crops_path
     
+    def delete_chat_data(self, chat_id: str) -> bool:
+        """
+        Удалить локальные данные чата.
+        
+        Удаляет папку {data_dir}/chats/{chat_id}/ со всем содержимым:
+        - chat.log
+        - full_dialog.log
+        - crops/
+        
+        Args:
+            chat_id: ID чата
+        
+        Returns:
+            True если успешно удалено
+        """
+        import shutil
+        
+        try:
+            data_dir = self.get_data_dir()
+            chat_dir = data_dir / "chats" / chat_id
+            
+            if chat_dir.exists():
+                shutil.rmtree(chat_dir)
+                logger.info(f"Deleted local chat data: {chat_dir}")
+                return True
+            else:
+                logger.debug(f"Chat directory not found: {chat_dir}")
+                return True  # Нет данных - считаем успехом
+        
+        except Exception as e:
+            logger.error(f"Error deleting chat data for {chat_id}: {e}")
+            return False
+    
     def save_chat_message(
         self,
         chat_id: str,

@@ -251,6 +251,30 @@ class AIZoomDocClient:
         data = response.json()
         return [ChatResponse(**chat) for chat in data]
     
+    def delete_chat(self, chat_id: UUID) -> bool:
+        """
+        Удалить чат (асинхронно на сервере).
+        
+        Сервер запускает каскадное удаление в фоне:
+        - Файлы из R2
+        - Логи сервера
+        - Записи БД
+        
+        Клиент должен отдельно удалить локальные файлы.
+        
+        Args:
+            chat_id: ID чата
+        
+        Returns:
+            True если удаление запланировано (202 Accepted)
+        """
+        try:
+            response = self._http.delete(f"/chats/{chat_id}")
+            return response.status_code == 202
+        except Exception as e:
+            logger.error(f"Error deleting chat {chat_id}: {e}")
+            return False
+    
     def use_chat(self, chat_id: UUID) -> ChatResponse:
         """
         Установить чат как активный.
