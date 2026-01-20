@@ -320,6 +320,9 @@ class HTTPClient:
                         import json as json_module
                         data = json_module.loads(sse.data) if sse.data else {}
                         
+                        # Отладка: выводим все SSE события
+                        print(f"[HTTP SSE] event={sse.event}, data_keys={list(data.keys()) if data else []}", flush=True)
+                        
                         yield StreamEvent(
                             event=sse.event or "message",
                             data=data,
@@ -332,6 +335,7 @@ class HTTPClient:
                             
                     except Exception as e:
                         logger.warning(f"Failed to parse SSE event: {e}")
+                        print(f"[HTTP SSE ERROR] {e}", flush=True)
                         continue
     
     def upload_file(self, path: str, file_path: Path) -> httpx.Response:

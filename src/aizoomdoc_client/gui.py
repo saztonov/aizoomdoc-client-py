@@ -125,9 +125,16 @@ class StreamWorker(QThread):
                     break
                 
                 # Отправляем все события для логирования
+                print(f"[SSE] Event: {event.event}, Data keys: {list(event.data.keys()) if event.data else []}", flush=True)
                 self.sse_event.emit(event.event, event.data)
                 
-                if event.event == "llm_token":
+                # Обработка событий очереди и статуса
+                if event.event == "queue_position":
+                    position = event.data.get("position", 0)
+                    self.phase_started.emit("queue", f"Позиция в очереди: {position}")
+                elif event.event == "processing_started":
+                    self.phase_started.emit("processing", "Обработка началась...")
+                elif event.event == "llm_token":
                     token = event.data.get("token", "")
                     if token:
                         self._received_tokens = True
@@ -146,6 +153,8 @@ class StreamWorker(QThread):
                     if content:
                         self.thinking_received.emit(content)
                 elif event.event == "image_ready":
+                    logger.info(f"[DEBUG] image_ready event received: {event.data}")
+                    print(f"[DEBUG] image_ready: {event.data}", flush=True)
                     self.image_ready.emit(event.data)
                 elif event.event == "llm_final":
                     content = event.data.get("content", "")
@@ -879,12 +888,19 @@ class ChatWidget(QWidget):
     
     def _on_image_ready(self, data: dict):
         """Изображение готово - отобразить в чате."""
+        logger.info(f"[DEBUG] _on_image_ready called with: {data}")
+        print(f"[DEBUG] _on_image_ready: {data}", flush=True)
+        
         block_id = data.get("block_id", "")
         kind = data.get("kind", "preview")
-        url = data.get("url", "")
+        # Сервер может отправлять url или public_url
+        url = data.get("url") or data.get("public_url", "")
         reason = data.get("reason", "")
         
+        print(f"[DEBUG] Extracted url: {url}", flush=True)
+        
         if not url:
+            print(f"[DEBUG] URL is empty, skipping image", flush=True)
             return
         
         # Обновляем статус
@@ -898,10 +914,14 @@ class ChatWidget(QWidget):
             import httpx
             import base64
             
-            response = httpx.get(url, timeout=15.0)
+            print(f"[DEBUG] Downloading image from {url}...", flush=True)
+            response = httpx.get(url, timeout=30.0)
+            print(f"[DEBUG] Response status: {response.status_code}", flush=True)
+            
             if response.status_code == 200:
                 content_type = response.headers.get('content-type', 'image/png')
                 img_bytes = response.content
+                print(f"[DEBUG] Image size: {len(img_bytes)} bytes", flush=True)
                 img_data = base64.b64encode(img_bytes).decode('utf-8')
                 data_url = f"data:{content_type};base64,{img_data}"
                 
@@ -916,14 +936,30 @@ class ChatWidget(QWidget):
     </a>
 </div>
 '''
+                print(f"[DEBUG] Inserting image...", flush=True)
+                cursor.insertHtml(html)
+                self.messages_area.setTextCursor(cursor)
+                self.messages_area.ensureCursorVisible()
+                print(f"[DEBUG] Image inserted successfully", flush=True)
+            else:
+                print(f"[DEBUG] Failed to download: HTTP {response.status_code}", flush=True)
+                # При ошибке показываем ссылку
+                html = f'''
+<div style="margin: 8px 0; padding: 8px; background: #fff3cd; border: 1px solid #ffc107; border-radius: 8px;">
+    <p style="margin: 0; color: #856404; font-size: 11px;">
+        ⚠️ Ошибка загрузки (HTTP {response.status_code}): 
+        <a href="{url}" style="color: #0066cc;">{block_id} ({kind})</a>
+    </p>
+</div>
+'''
                 cursor.insertHtml(html)
                 self.messages_area.setTextCursor(cursor)
                 self.messages_area.ensureCursorVisible()
                 
         except Exception as e:
+            print(f"[DEBUG] Exception: {e}", flush=True)
             logger.error(f"Error loading image {url}: {e}")
-            # Вставляем ссылку вместо изображения
-            cursor.insertHtml(f'<p style="color: #666;"><a href="{url}">🖼️ {block_id} ({kind})</a></p>')
+            cursor.insertHtml(f'<p><a href="{url}">🖼️ {block_id} ({kind})</a></p>')
             self.messages_area.setTextCursor(cursor)
     
     def load_model_setting(self):

@@ -111,19 +111,28 @@ class ChatHistoryResponse(BaseModel):
 
 # ===== STREAMING MODELS =====
 
+# Известные типы событий для подсказок IDE
+KNOWN_EVENT_TYPES = [
+    "phase_started",
+    "phase_progress",
+    "llm_token",
+    "llm_thinking",
+    "llm_final",
+    "tool_call",
+    "image_ready",
+    "error",
+    "completed",
+    # Дополнительные события от сервера
+    "queue_position",
+    "processing_started",
+    "message",
+]
+
+
 class StreamEvent(BaseModel):
     """Событие стриминга."""
-    event: Literal[
-        "phase_started",
-        "phase_progress",
-        "llm_token",
-        "llm_thinking",
-        "llm_final",
-        "tool_call",
-        "image_ready",
-        "error",
-        "completed"
-    ]
+    # Используем str вместо Literal для совместимости с новыми типами событий от сервера
+    event: str
     data: Dict[str, Any] = Field(default_factory=dict)
     timestamp: Optional[datetime] = None
 
