@@ -925,17 +925,10 @@ class ChatWidget(QWidget):
                 img_data = base64.b64encode(img_bytes).decode('utf-8')
                 data_url = f"data:{content_type};base64,{img_data}"
                 
-                # Вставляем HTML с изображением
-                html = f'''
-<div style="margin: 8px 0; padding: 8px; background: #f8f9fa; border: 1px solid #e0e0e0; border-radius: 8px;">
-    <p style="margin: 0 0 6px 0; color: #555; font-size: 11px; font-weight: bold;">
-        📷 {block_id} ({kind})
-    </p>
-    <a href="{url}">
-        <img src="{data_url}" width="400" style="max-width: 100%; border: 1px solid #ccc; border-radius: 4px;"/>
-    </a>
-</div>
-'''
+                # Вставляем изображение как отдельный блок
+                # Используем <br> для разделения и простой img без вложенных div
+                html = f'<br/><img src="{data_url}" width="400"/><br/><small style="color: #888;">📷 {block_id} ({kind})</small><br/>'
+                
                 print(f"[DEBUG] Inserting image...", flush=True)
                 cursor.insertHtml(html)
                 self.messages_area.setTextCursor(cursor)
@@ -943,15 +936,8 @@ class ChatWidget(QWidget):
                 print(f"[DEBUG] Image inserted successfully", flush=True)
             else:
                 print(f"[DEBUG] Failed to download: HTTP {response.status_code}", flush=True)
-                # При ошибке показываем ссылку
-                html = f'''
-<div style="margin: 8px 0; padding: 8px; background: #fff3cd; border: 1px solid #ffc107; border-radius: 8px;">
-    <p style="margin: 0; color: #856404; font-size: 11px;">
-        ⚠️ Ошибка загрузки (HTTP {response.status_code}): 
-        <a href="{url}" style="color: #0066cc;">{block_id} ({kind})</a>
-    </p>
-</div>
-'''
+                # При ошибке показываем текст (не ссылку)
+                html = f'<br/><span style="color: #856404;">⚠️ Ошибка загрузки {block_id} (HTTP {response.status_code})</span><br/>'
                 cursor.insertHtml(html)
                 self.messages_area.setTextCursor(cursor)
                 self.messages_area.ensureCursorVisible()
@@ -959,7 +945,8 @@ class ChatWidget(QWidget):
         except Exception as e:
             print(f"[DEBUG] Exception: {e}", flush=True)
             logger.error(f"Error loading image {url}: {e}")
-            cursor.insertHtml(f'<p><a href="{url}">🖼️ {block_id} ({kind})</a></p>')
+            html = f'<br/><span style="color: #cc0000;">❌ Ошибка: {block_id}</span><br/>'
+            cursor.insertHtml(html)
             self.messages_area.setTextCursor(cursor)
     
     def load_model_setting(self):
