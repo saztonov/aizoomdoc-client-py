@@ -1133,13 +1133,17 @@ class LeftPanel(QWidget):
     def _load_tree(self):
         if not self.client:
             return
-        
+
         try:
-            # Get ALL projects tree nodes from server (like v1 app)
+            # Get ALL projects tree nodes from server with files (MD, HTML)
             client_id = self.client_id_edit.text().strip() or None
-            tree_data = self.client.get_projects_tree(client_id=client_id, all_nodes=True)
+            tree_data = self.client.get_projects_tree(
+                client_id=client_id,
+                all_nodes=True,
+                include_files=True  # Включить файлы результатов (MD, HTML)
+            )
             self.tree_widget.clear()
-            
+
             if tree_data:
                 # Build hierarchy from flat list (as in v1)
                 nodes = []
@@ -1169,11 +1173,30 @@ class LeftPanel(QWidget):
                     else:
                         root_items.append(item)
 
+                # Add files as children of document nodes
+                files_count = 0
+                for node in nodes:
+                    if node.get("node_type") == "document" and node.get("files"):
+                        parent_item = node_items.get(str(node.get("id")))
+                        if parent_item:
+                            for file_info in node.get("files", []):
+                                file_item = QTreeWidgetItem()
+                                file_name = fix_mojibake(file_info.get("file_name", ""))
+                                file_type = file_info.get("file_type", "")
+                                file_item.setText(0, file_name)
+                                file_item.setText(1, file_type)
+                                file_item.setData(0, Qt.ItemDataRole.UserRole, file_info.get("id"))
+                                file_item.setData(0, Qt.ItemDataRole.UserRole + 1, file_type)
+                                # Store r2_key for potential download
+                                file_item.setData(0, Qt.ItemDataRole.UserRole + 2, file_info.get("r2_key"))
+                                parent_item.addChild(file_item)
+                                files_count += 1
+
                 # Add root items to tree
                 for item in root_items:
                     self.tree_widget.addTopLevelItem(item)
-                
-                logger.info(f"Tree loaded: {len(nodes)} nodes, {len(root_items)} root items")
+
+                logger.info(f"Tree loaded: {len(nodes)} nodes, {len(root_items)} root items, {files_count} files")
             else:
                 QMessageBox.information(self, "Информация", "Дерево проектов пусто")
         except Exception as e:

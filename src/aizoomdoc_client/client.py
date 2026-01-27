@@ -478,16 +478,18 @@ class AIZoomDocClient:
         self,
         client_id: Optional[str] = None,
         parent_id: Optional[UUID] = None,
-        all_nodes: bool = False
+        all_nodes: bool = False,
+        include_files: bool = False
     ) -> List[TreeNode]:
         """
         Получить дерево проектов.
-        
+
         Args:
             client_id: ID клиента (организации)
             parent_id: ID родительского узла
             all_nodes: Получить все узлы (для построения дерева на клиенте)
-        
+            include_files: Включить файлы результатов (MD, HTML) из job_files
+
         Returns:
             Список узлов дерева
         """
@@ -498,7 +500,9 @@ class AIZoomDocClient:
             params["parent_id"] = str(parent_id)
         if all_nodes:
             params["all_nodes"] = "true"
-        
+        if include_files:
+            params["include_files"] = "true"
+
         response = self._http.get("/projects/tree", params=params)
         data = response.json()
         return [TreeNode(**node) for node in data]

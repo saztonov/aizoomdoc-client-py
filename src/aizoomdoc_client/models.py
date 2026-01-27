@@ -201,6 +201,17 @@ class GoogleFileUploadResponse(BaseModel):
 
 # ===== PROJECTS TREE MODELS (read-only) =====
 
+class JobFileInfo(BaseModel):
+    """Информация о файле из job_files."""
+    id: UUID
+    job_id: UUID
+    file_type: str  # result_md, ocr_html
+    r2_key: str
+    file_name: str
+    file_size: Optional[int] = 0
+    created_at: datetime
+
+
 class TreeNode(BaseModel):
     """Узел дерева проектов."""
     id: UUID
@@ -215,6 +226,7 @@ class TreeNode(BaseModel):
     sort_order: int = 0
     created_at: datetime
     updated_at: datetime
+    files: List["JobFileInfo"] = Field(default_factory=list, description="Файлы результатов (MD, HTML)")
 
 
 class DocumentResults(BaseModel):
