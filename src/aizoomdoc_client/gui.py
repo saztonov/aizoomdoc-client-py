@@ -77,7 +77,8 @@ class StreamWorker(QThread):
         message: str,
         document_ids: Optional[List[str]] = None,
         client_id: Optional[str] = None,
-        local_files: Optional[List[str]] = None
+        local_files: Optional[List[str]] = None,
+        tree_files: Optional[List[dict]] = None
     ):
         super().__init__()
         self.client = client
@@ -86,6 +87,7 @@ class StreamWorker(QThread):
         self.document_ids = document_ids or []
         self.client_id = client_id
         self.local_files = local_files or []
+        self.tree_files = tree_files or []
         self._stop_requested = False
         self._received_tokens = False
     
@@ -119,7 +121,8 @@ class StreamWorker(QThread):
                 self.message,
                 attached_document_ids=doc_ids,
                 client_id=self.client_id,
-                google_files=google_files if google_files else None
+                google_files=google_files if google_files else None,
+                tree_files=self.tree_files if self.tree_files else None
             ):
                 if self._stop_requested:
                     break
@@ -660,14 +663,20 @@ class ChatWidget(QWidget):
         # Collect document IDs from attachments
         document_ids = []
         local_files = []
-        
+        tree_files = []
+
         # From attached files in chat widget
         for att in self.attached_files:
             if att.get("type") == "tree" and att.get("doc_id"):
                 document_ids.append(att["doc_id"])
             elif att.get("type") == "local" and att.get("path"):
                 local_files.append(att["path"])
-        
+            elif att.get("type") == "tree_file" and att.get("r2_key"):
+                tree_files.append({
+                    "r2_key": att["r2_key"],
+                    "file_type": att.get("file_type", "result_md")
+                })
+
         # Also check tree selection via attachments_provider
         client_id = None
         if callable(self.attachments_provider):
@@ -683,7 +692,8 @@ class ChatWidget(QWidget):
             message,
             document_ids=document_ids,
             client_id=client_id,
-            local_files=local_files
+            local_files=local_files,
+            tree_files=tree_files
         )
         self.worker.token_received.connect(self._on_token)
         self.worker.phase_started.connect(self._on_phase)
@@ -792,7 +802,19 @@ class ChatWidget(QWidget):
                 "name": name
             })
             self._update_attachments_display()
-    
+
+    def add_file_attachment(self, file_id: str, r2_key: str, file_type: str, file_name: str):
+        """Добавить файл MD/HTML из дерева к запросу."""
+        if not any(f.get("file_id") == file_id for f in self.attached_files):
+            self.attached_files.append({
+                "type": "tree_file",
+                "file_id": file_id,
+                "r2_key": r2_key,
+                "file_type": file_type,
+                "name": file_name
+            })
+            self._update_attachments_display()
+
     def _on_completed(self):
         self.status_label.setStyleSheet(self._status_idle_style)
         self.status_label.setText("")
@@ -982,6 +1004,7 @@ class LeftPanel(QWidget):
     chat_selected = pyqtSignal(str)  # chat_id
     new_chat_requested = pyqtSignal()
     chat_delete_requested = pyqtSignal(str)  # chat_id для удаления
+    files_selected = pyqtSignal(list)  # Список файлов MD/HTML для прикрепления к запросу
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1057,7 +1080,20 @@ class LeftPanel(QWidget):
         self.refresh_tree_btn = QPushButton("Загрузить дерево")
         self.refresh_tree_btn.clicked.connect(self._load_tree)
         tree_layout.addWidget(self.refresh_tree_btn)
-        
+
+        # Кнопки для добавления файлов MD/HTML к запросу
+        files_btn_layout = QHBoxLayout()
+        files_btn_layout.setSpacing(5)
+        self.add_md_btn = QPushButton("+ MD к запросу")
+        self.add_md_btn.setToolTip("Добавить выбранные MD файлы к запросу в чат")
+        self.add_md_btn.clicked.connect(self._add_md_to_request)
+        self.add_html_btn = QPushButton("+ HTML к запросу")
+        self.add_html_btn.setToolTip("Добавить выбранные HTML файлы к запросу в чат")
+        self.add_html_btn.clicked.connect(self._add_html_to_request)
+        files_btn_layout.addWidget(self.add_md_btn)
+        files_btn_layout.addWidget(self.add_html_btn)
+        tree_layout.addLayout(files_btn_layout)
+
         self.tree_widget = QTreeWidget()
         self.tree_widget.setHeaderLabels(["Название", "Тип"])
         self.tree_widget.setColumnWidth(0, 200)
@@ -1278,6 +1314,46 @@ class LeftPanel(QWidget):
     def get_client_id(self) -> str:
         return self.client_id_edit.text().strip()
 
+    def get_selected_files(self) -> List[dict]:
+        """Получить выбранные файлы MD/HTML из дерева."""
+        selected = []
+        for item in self.tree_widget.selectedItems():
+            file_type = item.data(0, Qt.ItemDataRole.UserRole + 1)
+            if file_type in ("result_md", "ocr_html"):
+                file_id = item.data(0, Qt.ItemDataRole.UserRole)
+                r2_key = item.data(0, Qt.ItemDataRole.UserRole + 2)
+                file_name = item.text(0)
+                if file_id and r2_key:
+                    selected.append({
+                        "file_id": str(file_id),
+                        "r2_key": r2_key,
+                        "file_type": file_type,
+                        "file_name": file_name
+                    })
+        return selected
+
+    def _add_md_to_request(self):
+        """Добавить выбранные MD файлы к запросу."""
+        self._add_files_to_request("result_md")
+
+    def _add_html_to_request(self):
+        """Добавить выбранные HTML файлы к запросу."""
+        self._add_files_to_request("ocr_html")
+
+    def _add_files_to_request(self, file_type: str):
+        """Добавить файлы указанного типа к запросу."""
+        files = [f for f in self.get_selected_files() if f["file_type"] == file_type]
+        if files:
+            self.files_selected.emit(files)
+        else:
+            type_name = "MD" if file_type == "result_md" else "HTML"
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.information(
+                self,
+                "Информация",
+                f"Выберите файлы {type_name} в дереве (дочерние элементы документов)"
+            )
+
 
 class MainWindow(QMainWindow):
     """Main application window."""
@@ -1346,6 +1422,7 @@ class MainWindow(QMainWindow):
         self.left_panel.chat_selected.connect(self._on_chat_selected)
         self.left_panel.new_chat_requested.connect(self._create_new_chat)
         self.left_panel.chat_delete_requested.connect(self._on_chat_delete)
+        self.left_panel.files_selected.connect(self._on_files_selected)
         splitter.addWidget(self.left_panel)
         
         # Chat widget
@@ -1507,6 +1584,16 @@ class MainWindow(QMainWindow):
     def _on_new_chat_created(self, chat_id: str, title: str):
         """Добавить новый чат в список после его создания."""
         self.left_panel.add_chat(chat_id, title)
+
+    def _on_files_selected(self, files: list):
+        """Обработать выбор файлов MD/HTML из дерева."""
+        for f in files:
+            self.chat_widget.add_file_attachment(
+                file_id=f["file_id"],
+                r2_key=f["r2_key"],
+                file_type=f["file_type"],
+                file_name=f["file_name"]
+            )
 
     def _get_message_context(self) -> dict:
         """Получить client_id и выбранные документы для сообщения."""

@@ -307,11 +307,12 @@ class AIZoomDocClient:
         attached_file_ids: Optional[List[UUID]] = None,
         attached_document_ids: Optional[List[UUID]] = None,
         client_id: Optional[str] = None,
-        google_files: Optional[List[dict]] = None
+        google_files: Optional[List[dict]] = None,
+        tree_files: Optional[List[dict]] = None
     ) -> Iterator[StreamEvent]:
         """
         Отправить сообщение в чат со стримингом ответа.
-        
+
         Args:
             chat_id: ID чата
             message: Текст сообщения
@@ -319,10 +320,11 @@ class AIZoomDocClient:
             attached_document_ids: ID документов из дерева проектов
             client_id: ID клиента
             google_files: Файлы из Google File API [{uri, mime_type}]
-        
+            tree_files: Файлы MD/HTML из дерева [{r2_key, file_type}]
+
         Yields:
             События стриминга (фазы, токены LLM, ошибки)
-        
+
         Example:
             ```python
             for event in client.send_message(chat.id, "Вопрос"):
@@ -339,10 +341,12 @@ class AIZoomDocClient:
             data["attached_document_ids"] = [str(did) for did in attached_document_ids]
         if google_files:
             data["google_files"] = google_files
-        
+        if tree_files:
+            data["tree_files"] = tree_files
+
         # Отправляем сообщение
         response = self._http.post(f"/chats/{chat_id}/messages", json=data)
-        
+
         # Стримим события
         params = {}
         if client_id:
@@ -352,6 +356,9 @@ class AIZoomDocClient:
         if google_files:
             import json
             params["google_files"] = json.dumps(google_files)
+        if tree_files:
+            import json
+            params["tree_files"] = json.dumps(tree_files)
 
         yield from self._http.stream_sse(
             f"/chats/{chat_id}/stream",
