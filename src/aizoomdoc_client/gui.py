@@ -405,6 +405,8 @@ class ChatWidget(QWidget):
         self.attachments_provider = None
         self.attached_files: List[dict] = []  # List of attached files
         self._accumulated_response = ""  # Для локального сохранения ответа
+        self._pulse_state = 0  # Состояние анимации индикатора
+        self._shown_phases = set()  # Отслеживание показанных фаз (чтобы не дублировать)
         self._setup_ui()
     
     def _setup_ui(self):
@@ -433,12 +435,29 @@ class ChatWidget(QWidget):
         self.messages_area.setFont(QFont("Segoe UI", 11))
         layout.addWidget(self.messages_area, 1)
         
-        # Status
+        # Status bar with progress indicator
+        status_layout = QHBoxLayout()
+        status_layout.setContentsMargins(0, 2, 0, 2)
+
+        # Progress indicator (пульсирующая точка)
+        self.progress_indicator = QLabel("")
+        self.progress_indicator.setFixedWidth(20)
+        self.progress_indicator.setStyleSheet("color: #4CAF50; font-size: 14px;")
+        self.progress_indicator.setVisible(False)
+        status_layout.addWidget(self.progress_indicator)
+
+        # Status label
         self.status_label = QLabel("")
         self._status_idle_style = "color: #666; font-style: italic;"
         self._status_active_style = "color: #0066cc; font-weight: bold;"
         self.status_label.setStyleSheet(self._status_idle_style)
-        layout.addWidget(self.status_label)
+        status_layout.addWidget(self.status_label, 1)
+
+        layout.addLayout(status_layout)
+
+        # Timer for progress indicator animation
+        self.pulse_timer = QTimer()
+        self.pulse_timer.timeout.connect(self._pulse_indicator)
         
         # Attachments panel
         self.attachments_panel = QWidget()
@@ -639,9 +658,11 @@ class ChatWidget(QWidget):
         self.status_label.setStyleSheet(self._status_active_style)
         self.status_label.setText("⏳ Диалог с LLM активен...")
         self.status_label.setVisible(True)
-        
-        # Сброс накопленного ответа
+
+        # Сброс состояния для нового запроса
         self._accumulated_response = ""
+        self._reset_shown_phases()
+        self._start_progress_indicator()
         
         cursor = self.messages_area.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.End)
@@ -721,13 +742,68 @@ class ChatWidget(QWidget):
         self._accumulated_response += token
     
     def _on_phase(self, phase: str, desc: str):
+        """Обработка смены фазы обработки."""
         self.status_label.setStyleSheet(self._status_active_style)
         self.status_label.setText(f"[{phase}] {desc}")
+        self._start_progress_indicator()
+
+        # Маппинг фаз на читаемые сообщения для чата
+        phase_messages = {
+            "queue": "⏳ Ожидание в очереди...",
+            "processing": "⚙️ Обработка запроса",
+            "upload": "📤 Загрузка файлов",
+            "intent_router": "🧠 Анализ намерения",
+            "flash_collect": "📚 Сбор материалов (Flash)",
+            "pro_answer": "✍️ Генерация ответа (Pro)",
+            "search": "🔍 Поиск по документам",
+            "llm": "💬 Генерация ответа",
+        }
+
+        # Определяем ключевую фазу по подстроке
+        phase_key = None
+        phase_lower = phase.lower()
+        for key in phase_messages:
+            if key in phase_lower:
+                phase_key = key
+                break
+
+        # Показываем в чате только если фаза ещё не была показана
+        if phase_key and phase_key not in self._shown_phases:
+            self._shown_phases.add(phase_key)
+            self._append_system_message(phase_messages[phase_key], "progress")
     
     def _on_error(self, error: str):
-        self.status_label.setStyleSheet(self._status_active_style)
-        self.status_label.setText(f"Ошибка: {error}")
+        """Обработка ошибки."""
+        self._stop_progress_indicator()
         self.send_btn.setEnabled(True)
+
+        # Понятные сообщения для известных ошибок
+        error_messages = {
+            "failed to obtain final answer":
+                "Не удалось получить ответ. Возможно, файлы документа недоступны или повреждены.",
+            "connection refused":
+                "Сервер недоступен. Проверьте подключение.",
+            "connection error":
+                "Ошибка соединения с сервером.",
+            "token expired":
+                "Сессия истекла. Требуется повторная авторизация.",
+            "timeout":
+                "Превышено время ожидания ответа от сервера.",
+            "no documents found":
+                "Документы не найдены.",
+        }
+
+        # Ищем подходящее сообщение
+        user_msg = error
+        error_lower = error.lower()
+        for key, msg in error_messages.items():
+            if key in error_lower:
+                user_msg = msg
+                break
+
+        self.status_label.setStyleSheet("color: #dc3545; font-weight: bold;")
+        self.status_label.setText(f"❌ {user_msg}")
+        self._append_system_message(f"❌ Ошибка: {user_msg}", "error")
     
     def _attach_file(self):
         """Attach a local file (MD, HTML, TXT)."""
@@ -816,9 +892,12 @@ class ChatWidget(QWidget):
             self._update_attachments_display()
 
     def _on_completed(self):
+        """Обработка завершения ответа."""
+        self._stop_progress_indicator()
         self.status_label.setStyleSheet(self._status_idle_style)
-        self.status_label.setText("")
+        self.status_label.setText("✅ Готово")
         self.send_btn.setEnabled(True)
+
         cursor = self.messages_area.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.End)
         # Закрываем блок ответа LLM
@@ -832,8 +911,12 @@ class ChatWidget(QWidget):
         ''')
         self.messages_area.setTextCursor(cursor)
         self.messages_area.ensureCursorVisible()
-        
+
+        # Показываем успешное завершение в чате
+        self._append_system_message("✅ Ответ получен", "success")
+
         self._accumulated_response = ""
+        self._reset_shown_phases()
     
     def _on_model_changed(self):
         """Изменение режима модели (сохраняется на сервере)."""
@@ -855,6 +938,8 @@ class ChatWidget(QWidget):
     
     def _on_tool_call(self, tool: str, reason: str, params: dict):
         """Обработка запроса инструмента от LLM (request_images, zoom)."""
+        self._start_progress_indicator()
+
         # Отображаем в статусе
         self.status_label.setStyleSheet(self._status_active_style)
         if tool == "request_images":
@@ -996,6 +1081,63 @@ class ChatWidget(QWidget):
         elif profile == "complex":
             return "Gemini Pro"
         return "LLM"
+
+    # ==================== Progress Indicator Methods ====================
+
+    def _start_progress_indicator(self):
+        """Запустить анимацию индикатора процесса."""
+        self.progress_indicator.setVisible(True)
+        if not self.pulse_timer.isActive():
+            self.pulse_timer.start(400)  # каждые 400мс
+
+    def _stop_progress_indicator(self):
+        """Остановить анимацию индикатора процесса."""
+        self.pulse_timer.stop()
+        self.progress_indicator.setVisible(False)
+        self._pulse_state = 0
+
+    def _pulse_indicator(self):
+        """Анимация пульсации индикатора."""
+        symbols = ["◐", "◓", "◑", "◒"]  # Вращающийся индикатор
+        self._pulse_state = (self._pulse_state + 1) % len(symbols)
+        self.progress_indicator.setText(symbols[self._pulse_state])
+
+    # ==================== System Messages ====================
+
+    def _append_system_message(self, text: str, msg_type: str = "info"):
+        """Добавить системное сообщение в чат (стадии обработки, ошибки).
+
+        Args:
+            text: Текст сообщения
+            msg_type: Тип сообщения (info, progress, warning, error, success)
+        """
+        colors = {
+            "info": "#6c757d",      # серый
+            "progress": "#17a2b8",   # синий
+            "warning": "#ffc107",    # жёлтый
+            "error": "#dc3545",      # красный
+            "success": "#28a745"     # зелёный
+        }
+        color = colors.get(msg_type, colors["info"])
+
+        html = f'''
+        <table width="100%"><tr>
+            <td align="center" style="padding: 2px 0;">
+                <span style="color: {color}; font-size: 10px; font-style: italic;">
+                    {text}
+                </span>
+            </td>
+        </tr></table>
+        '''
+        cursor = self.messages_area.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        cursor.insertHtml(html)
+        self.messages_area.setTextCursor(cursor)
+        self.messages_area.ensureCursorVisible()
+
+    def _reset_shown_phases(self):
+        """Сбросить отслеживание показанных фаз (вызывать при отправке нового сообщения)."""
+        self._shown_phases.clear()
 
 
 class LeftPanel(QWidget):
