@@ -1032,9 +1032,8 @@ class ChatWidget(QWidget):
                 img_data = base64.b64encode(img_bytes).decode('utf-8')
                 data_url = f"data:{content_type};base64,{img_data}"
                 
-                # Вставляем изображение как отдельный блок
-                # Используем <br> для разделения и простой img без вложенных div
-                html = f'<br/><img src="{data_url}" width="400"/><br/><small style="color: #888;">📷 {block_id} ({kind})</small><br/>'
+                # Вставляем изображение как отдельный блок с кликабельной ссылкой
+                html = f'<br/><a href="{url}"><img src="{data_url}" width="400" style="max-width: 100%; border: 1px solid #ccc;"/></a><br/><small style="color: #888;">📷 {block_id} ({kind})</small><br/>'
                 
                 print(f"[DEBUG] Inserting image...", flush=True)
                 cursor.insertHtml(html)
