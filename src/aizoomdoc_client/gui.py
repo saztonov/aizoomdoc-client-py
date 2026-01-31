@@ -1208,42 +1208,31 @@ class LeftPanel(QWidget):
         tree_layout = QVBoxLayout(tree_page)
         tree_layout.setContentsMargins(5, 5, 5, 5)
         
-        # Client ID input
-        client_layout = QHBoxLayout()
-        client_layout.addWidget(QLabel("Client ID:"))
-        self.client_id_edit = QLineEdit()
-        self.client_id_edit.setPlaceholderText("Опционально (можно оставить пустым)")
-        client_layout.addWidget(self.client_id_edit)
-        tree_layout.addLayout(client_layout)
-        
+        # Header with refresh button
+        header_layout = QHBoxLayout()
         self.selected_docs_label = QLabel("Выбрано документов: 0")
-        tree_layout.addWidget(self.selected_docs_label)
-
-        self.refresh_tree_btn = QPushButton("Загрузить дерево")
+        header_layout.addWidget(self.selected_docs_label)
+        header_layout.addStretch()
+        self.refresh_tree_btn = QPushButton("↻")
+        self.refresh_tree_btn.setFixedSize(28, 28)
+        self.refresh_tree_btn.setToolTip("Обновить дерево")
         self.refresh_tree_btn.clicked.connect(self._load_tree)
-        tree_layout.addWidget(self.refresh_tree_btn)
+        header_layout.addWidget(self.refresh_tree_btn)
+        tree_layout.addLayout(header_layout)
 
-        # Кнопки для добавления файлов MD/HTML к запросу
-        files_btn_layout = QHBoxLayout()
-        files_btn_layout.setSpacing(5)
-        self.add_md_btn = QPushButton("+ MD к запросу")
-        self.add_md_btn.setToolTip("Добавить выбранные MD файлы к запросу в чат")
-        self.add_md_btn.clicked.connect(self._add_md_to_request)
-        self.add_html_btn = QPushButton("+ HTML к запросу")
-        self.add_html_btn.setToolTip("Добавить выбранные HTML файлы к запросу в чат")
-        self.add_html_btn.clicked.connect(self._add_html_to_request)
-        files_btn_layout.addWidget(self.add_md_btn)
-        files_btn_layout.addWidget(self.add_html_btn)
-        tree_layout.addLayout(files_btn_layout)
+        # Flag to track if tree was loaded
+        self._tree_loaded = False
 
         self.tree_widget = QTreeWidget()
-        self.tree_widget.setHeaderLabels(["Название", "Тип"])
+        self.tree_widget.setHeaderLabels(["Название"])
         self.tree_widget.setColumnWidth(0, 200)
         self.tree_widget.setRootIsDecorated(True)
         self.tree_widget.setItemsExpandable(True)
         self.tree_widget.setSelectionMode(QTreeWidget.SelectionMode.ExtendedSelection)
         self.tree_widget.itemSelectionChanged.connect(self._update_selected_docs)
         self.tree_widget.itemExpanded.connect(self._on_tree_item_expanded)
+        self.tree_widget.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.tree_widget.customContextMenuRequested.connect(self._on_tree_context_menu)
         tree_layout.addWidget(self.tree_widget, 1)
         
         self.stack.addWidget(tree_page)
@@ -1257,6 +1246,9 @@ class LeftPanel(QWidget):
             self.stack.setCurrentIndex(1)
             self.btn_chats.setChecked(False)
             self.btn_tree.setChecked(True)
+            # Auto-load tree on first switch
+            if not self._tree_loaded and self.client:
+                self._load_tree()
     
     def _on_chat_clicked(self, item: QListWidgetItem):
         chat_id = item.data(Qt.ItemDataRole.UserRole)
@@ -1314,13 +1306,13 @@ class LeftPanel(QWidget):
 
         try:
             # Get ALL projects tree nodes from server with files (MD, HTML)
-            client_id = self.client_id_edit.text().strip() or None
             tree_data = self.client.get_projects_tree(
-                client_id=client_id,
+                client_id=None,
                 all_nodes=True,
                 include_files=True  # Включить файлы результатов (MD, HTML)
             )
             self.tree_widget.clear()
+            self._tree_loaded = True
 
             if tree_data:
                 # Build hierarchy from flat list (as in v1)
@@ -1336,7 +1328,6 @@ class LeftPanel(QWidget):
                     name = fix_mojibake(node.get("name", ""))
                     node_type = node.get("node_type", "")
                     item.setText(0, name)
-                    item.setText(1, node_type)
                     item.setData(0, Qt.ItemDataRole.UserRole, node.get("id"))
                     item.setData(0, Qt.ItemDataRole.UserRole + 1, node_type)
                     node_items[str(node.get("id"))] = item
@@ -1362,7 +1353,6 @@ class LeftPanel(QWidget):
                                 file_name = fix_mojibake(file_info.get("file_name", ""))
                                 file_type = file_info.get("file_type", "")
                                 file_item.setText(0, file_name)
-                                file_item.setText(1, file_type)
                                 file_item.setData(0, Qt.ItemDataRole.UserRole, file_info.get("id"))
                                 file_item.setData(0, Qt.ItemDataRole.UserRole + 1, file_type)
                                 # Store r2_key for potential download
@@ -1384,17 +1374,16 @@ class LeftPanel(QWidget):
     def _add_tree_node(self, parent, node: dict):
         name = fix_mojibake(node.get("name", ""))
         node_type = node.get("node_type", "")
-        
+
         if parent is None:
             item = QTreeWidgetItem(self.tree_widget)
         else:
             item = QTreeWidgetItem(parent)
-        
+
         item.setText(0, name)
-        item.setText(1, node_type)
         item.setData(0, Qt.ItemDataRole.UserRole, node.get("id"))
         item.setData(0, Qt.ItemDataRole.UserRole + 1, node_type)
-        
+
         children = node.get("children", [])
         for child in children:
             self._add_tree_node(item, child)
@@ -1407,38 +1396,37 @@ class LeftPanel(QWidget):
         """Lazy-load children when node is expanded."""
         if not self.client:
             return
-        
+
         # Check if this item has a placeholder child
         if item.childCount() == 1 and item.child(0).text(0) == "...":
             # Remove placeholder
             item.takeChild(0)
-            
+
             # Load actual children
             parent_id = item.data(0, Qt.ItemDataRole.UserRole)
             if not parent_id:
                 return
-            
+
             try:
                 from uuid import UUID
                 children = self.client.get_projects_tree(
-                    client_id=self.client_id_edit.text().strip() or None,
+                    client_id=None,
                     parent_id=UUID(str(parent_id))
                 )
-                
+
                 for child_node in children:
                     node_dict = child_node.model_dump() if hasattr(child_node, 'model_dump') else child_node.__dict__
                     child_item = QTreeWidgetItem()
                     name = fix_mojibake(node_dict.get("name", ""))
                     node_type = node_dict.get("node_type", "")
                     child_item.setText(0, name)
-                    child_item.setText(1, node_type)
                     child_item.setData(0, Qt.ItemDataRole.UserRole, node_dict.get("id"))
                     child_item.setData(0, Qt.ItemDataRole.UserRole + 1, node_type)
-                    
+
                     # Add placeholder if this child has children
                     if node_dict.get("children_count", 0) or node_dict.get("descendants_count", 0):
-                        child_item.addChild(QTreeWidgetItem(["...", ""]))
-                    
+                        child_item.addChild(QTreeWidgetItem(["..."]))
+
                     item.addChild(child_item)
             except Exception as e:
                 logger.error(f"Error loading children: {e}")
@@ -1452,9 +1440,6 @@ class LeftPanel(QWidget):
                 if doc_id:
                     selected.append(str(doc_id))
         return selected
-
-    def get_client_id(self) -> str:
-        return self.client_id_edit.text().strip()
 
     def get_selected_files(self) -> List[dict]:
         """Получить выбранные файлы MD/HTML из дерева."""
@@ -1474,27 +1459,70 @@ class LeftPanel(QWidget):
                     })
         return selected
 
-    def _add_md_to_request(self):
-        """Добавить выбранные MD файлы к запросу."""
-        self._add_files_to_request("result_md")
+    def _on_tree_context_menu(self, position):
+        """Контекстное меню для элементов дерева."""
+        item = self.tree_widget.itemAt(position)
+        if not item:
+            return
 
-    def _add_html_to_request(self):
-        """Добавить выбранные HTML файлы к запросу."""
-        self._add_files_to_request("ocr_html")
+        node_type = item.data(0, Qt.ItemDataRole.UserRole + 1)
+        menu = QMenu(self)
 
-    def _add_files_to_request(self, file_type: str):
-        """Добавить файлы указанного типа к запросу."""
-        files = [f for f in self.get_selected_files() if f["file_type"] == file_type]
+        # Для файлов MD/HTML - добавить к запросу
+        if node_type in ("result_md", "ocr_html"):
+            type_label = "MD" if node_type == "result_md" else "HTML"
+            add_action = menu.addAction(f"Добавить {type_label} к запросу")
+
+            action = menu.exec(self.tree_widget.mapToGlobal(position))
+            if action == add_action:
+                file_id = item.data(0, Qt.ItemDataRole.UserRole)
+                r2_key = item.data(0, Qt.ItemDataRole.UserRole + 2)
+                file_name = item.text(0)
+                if file_id and r2_key:
+                    self.files_selected.emit([{
+                        "file_id": str(file_id),
+                        "r2_key": r2_key,
+                        "file_type": node_type,
+                        "file_name": file_name
+                    }])
+
+        # Для документов - добавить дочерние файлы
+        elif node_type == "document":
+            add_md_action = menu.addAction("Добавить MD к запросу")
+            add_html_action = menu.addAction("Добавить HTML к запросу")
+            add_all_action = menu.addAction("Добавить все файлы к запросу")
+
+            action = menu.exec(self.tree_widget.mapToGlobal(position))
+            if action:
+                self._add_document_files_to_request(item, action, add_md_action, add_html_action, add_all_action)
+
+    def _add_document_files_to_request(self, doc_item, action, md_action, html_action, all_action):
+        """Добавить файлы из документа к запросу."""
+        files = []
+        for i in range(doc_item.childCount()):
+            child = doc_item.child(i)
+            child_type = child.data(0, Qt.ItemDataRole.UserRole + 1)
+
+            if child_type in ("result_md", "ocr_html"):
+                include = (
+                    action == all_action or
+                    (action == md_action and child_type == "result_md") or
+                    (action == html_action and child_type == "ocr_html")
+                )
+                if include:
+                    file_id = child.data(0, Qt.ItemDataRole.UserRole)
+                    r2_key = child.data(0, Qt.ItemDataRole.UserRole + 2)
+                    file_name = child.text(0)
+                    if file_id and r2_key:
+                        files.append({
+                            "file_id": str(file_id),
+                            "r2_key": r2_key,
+                            "file_type": child_type,
+                            "file_name": file_name
+                        })
+
         if files:
             self.files_selected.emit(files)
-        else:
-            type_name = "MD" if file_type == "result_md" else "HTML"
-            from PyQt6.QtWidgets import QMessageBox
-            QMessageBox.information(
-                self,
-                "Информация",
-                f"Выберите файлы {type_name} в дереве (дочерние элементы документов)"
-            )
 
 
 class MainWindow(QMainWindow):
@@ -1738,11 +1766,10 @@ class MainWindow(QMainWindow):
             )
 
     def _get_message_context(self) -> dict:
-        """Получить client_id и выбранные документы для сообщения."""
+        """Получить выбранные документы для сообщения."""
         if not self.left_panel:
             return {}
         return {
-            "client_id": self.left_panel.get_client_id(),
             "document_ids": self.left_panel.get_selected_document_ids()
         }
     
