@@ -1299,6 +1299,14 @@ class LeftPanel(QWidget):
         self.chat_list.insertItem(0, item)
         self.chat_list.setCurrentItem(item)
     
+    def _format_node_display_name(self, node: dict) -> str:
+        """Форматировать имя узла: (code) name или просто name."""
+        name = fix_mojibake(node.get("name", ""))
+        code = node.get("code")
+        if code:
+            return f"({code}) {name}"
+        return name
+
     def _load_tree(self):
         if not self.client:
             return
@@ -1324,9 +1332,8 @@ class LeftPanel(QWidget):
                 node_items: dict[str, QTreeWidgetItem] = {}
                 for node in nodes:
                     item = QTreeWidgetItem()
-                    name = fix_mojibake(node.get("name", ""))
                     node_type = node.get("node_type", "")
-                    item.setText(0, name)
+                    item.setText(0, self._format_node_display_name(node))
                     item.setData(0, Qt.ItemDataRole.UserRole, node.get("id"))
                     item.setData(0, Qt.ItemDataRole.UserRole + 1, node_type)
                     node_items[str(node.get("id"))] = item
@@ -1371,7 +1378,6 @@ class LeftPanel(QWidget):
             QMessageBox.warning(self, "Ошибка", f"Не удалось загрузить дерево: {e}")
     
     def _add_tree_node(self, parent, node: dict):
-        name = fix_mojibake(node.get("name", ""))
         node_type = node.get("node_type", "")
 
         if parent is None:
@@ -1379,7 +1385,7 @@ class LeftPanel(QWidget):
         else:
             item = QTreeWidgetItem(parent)
 
-        item.setText(0, name)
+        item.setText(0, self._format_node_display_name(node))
         item.setData(0, Qt.ItemDataRole.UserRole, node.get("id"))
         item.setData(0, Qt.ItemDataRole.UserRole + 1, node_type)
 
@@ -1416,9 +1422,8 @@ class LeftPanel(QWidget):
                 for child_node in children:
                     node_dict = child_node.model_dump() if hasattr(child_node, 'model_dump') else child_node.__dict__
                     child_item = QTreeWidgetItem()
-                    name = fix_mojibake(node_dict.get("name", ""))
                     node_type = node_dict.get("node_type", "")
-                    child_item.setText(0, name)
+                    child_item.setText(0, self._format_node_display_name(node_dict))
                     child_item.setData(0, Qt.ItemDataRole.UserRole, node_dict.get("id"))
                     child_item.setData(0, Qt.ItemDataRole.UserRole + 1, node_type)
 
