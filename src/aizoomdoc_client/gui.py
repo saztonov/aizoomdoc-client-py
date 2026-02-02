@@ -10,11 +10,13 @@ from pathlib import Path
 from typing import Optional, List
 from datetime import datetime
 
-# Fix encoding for Windows
+# Fix encoding for Windows (with None check for PyInstaller windowed mode)
 if sys.platform == 'win32':
     import codecs
-    sys.stdout = codecs.getwriter('utf-8')(sys.stdout.buffer, 'replace')
-    sys.stderr = codecs.getwriter('utf-8')(sys.stderr.buffer, 'replace')
+    if sys.stdout is not None:
+        sys.stdout = codecs.getwriter('utf-8')(sys.stdout.buffer, 'replace')
+    if sys.stderr is not None:
+        sys.stderr = codecs.getwriter('utf-8')(sys.stderr.buffer, 'replace')
 
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
