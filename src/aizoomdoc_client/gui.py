@@ -1641,7 +1641,27 @@ class MainWindow(QMainWindow):
                 return
             except Exception as e:
                 logger.info(f"Auto-login with saved token failed: {e}")
-        
+
+        # Пробуем встроенные credentials (для production exe)
+        default_creds = config.get_default_credentials()
+        if default_creds:
+            try:
+                self.client = AIZoomDocClient(
+                    server_url=default_creds["server_url"],
+                    static_token=default_creds["static_token"]
+                )
+                self.client.authenticate()
+                user_info = self.client.get_me()
+                # Сохраняем для будущих запусков
+                config.save_static_token(
+                    default_creds["static_token"],
+                    default_creds["server_url"]
+                )
+                self._on_login_success(user_info)
+                return
+            except Exception as e:
+                logger.info(f"Auto-login with default credentials failed: {e}")
+
         self._show_login()
     
     def _show_login(self):

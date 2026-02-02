@@ -17,6 +17,15 @@ from aizoomdoc_client.models import ClientConfig, TokenData
 
 logger = logging.getLogger(__name__)
 
+# =============================================================================
+# ВСТРОЕННЫЕ НАСТРОЙКИ ДЛЯ PRODUCTION
+# =============================================================================
+# Эти значения используются для автоматического подключения к серверу
+# при первом запуске exe-клиента без необходимости ручной настройки
+DEFAULT_SERVER_URL = "https://osa.fvds.ru"
+DEFAULT_STATIC_TOKEN = "dev-static-token-default-user"
+# =============================================================================
+
 
 class ConfigManager:
     """Менеджер конфигурации клиента."""
@@ -59,7 +68,7 @@ class ConfigManager:
         if not self.config_file.exists():
             # Конфигурация по умолчанию
             self._config = ClientConfig(
-                server_url="http://localhost:8000",
+                server_url=DEFAULT_SERVER_URL,
                 token_data=None,
                 active_chat_id=None,
                 data_dir=None
@@ -87,7 +96,7 @@ class ConfigManager:
         except (json.JSONDecodeError, KeyError, ValueError) as e:
             # Поврежденный файл - создаём новую конфигурацию
             self._config = ClientConfig(
-                server_url="http://localhost:8000",
+                server_url=DEFAULT_SERVER_URL,
                 token_data=None,
                 active_chat_id=None,
                 data_dir=None
@@ -306,12 +315,29 @@ class ConfigManager:
         try:
             data_dir = self.get_data_dir()
             token_file = data_dir / "credentials.json"
-            
+
             if token_file.exists():
                 token_file.unlink()
                 logger.info("Static token file removed")
         except Exception as e:
             logger.error(f"Error clearing static token: {e}")
+
+    def get_default_credentials(self) -> Optional[Dict[str, str]]:
+        """
+        Получить встроенные credentials для автоматического подключения.
+
+        Используется когда нет сохранённых credentials и нужно
+        автоматически подключиться к серверу при первом запуске.
+
+        Returns:
+            Dict с 'static_token' и 'server_url' или None если не заданы
+        """
+        if DEFAULT_STATIC_TOKEN and DEFAULT_SERVER_URL:
+            return {
+                "static_token": DEFAULT_STATIC_TOKEN,
+                "server_url": DEFAULT_SERVER_URL
+            }
+        return None
     
     def get_data_dir(self) -> Path:
         """
