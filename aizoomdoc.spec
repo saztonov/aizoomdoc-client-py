@@ -4,26 +4,28 @@ PyInstaller spec file for AIZoomDoc Client
 
 Сборка:
     pip install pyinstaller
-    pyinstaller aizoomdoc.spec
+    pyinstaller aizoomdoc.spec --clean
 
 Результат будет в dist/AIZoomDoc.exe
 """
 
+from PyInstaller.utils.hooks import collect_all, collect_submodules
+
 block_cipher = None
+
+# Собираем все модули httpx_sse
+httpx_sse_datas, httpx_sse_binaries, httpx_sse_hiddenimports = collect_all('httpx_sse')
 
 a = Analysis(
     ['run_gui.py'],
     pathex=['src'],
-    binaries=[],
-    datas=[],
+    binaries=httpx_sse_binaries,
+    datas=httpx_sse_datas,
     hiddenimports=[
         # HTTP клиент
         'httpx',
         'httpx._transports',
         'httpx._transports.default',
-        'httpx_sse',
-        'httpx_sse._decoders',
-        'httpx_sse._exceptions',
         'anyio',
         'anyio._backends',
         'anyio._backends._asyncio',
@@ -70,7 +72,7 @@ a = Analysis(
         'typing',
         'asyncio',
         'codecs',
-    ],
+    ] + httpx_sse_hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
