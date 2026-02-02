@@ -22,6 +22,8 @@ a = Analysis(
         'httpx._transports',
         'httpx._transports.default',
         'httpx_sse',
+        'httpx_sse._decoders',
+        'httpx_sse._exceptions',
         'anyio',
         'anyio._backends',
         'anyio._backends._asyncio',
