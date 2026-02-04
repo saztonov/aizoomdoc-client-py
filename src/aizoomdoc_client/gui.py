@@ -80,7 +80,9 @@ class StreamWorker(QThread):
         document_ids: Optional[List[str]] = None,
         client_id: Optional[str] = None,
         local_files: Optional[List[str]] = None,
-        tree_files: Optional[List[dict]] = None
+        tree_files: Optional[List[dict]] = None,
+        compare_document_ids_a: Optional[List[str]] = None,
+        compare_document_ids_b: Optional[List[str]] = None
     ):
         super().__init__()
         self.client = client
@@ -90,6 +92,8 @@ class StreamWorker(QThread):
         self.client_id = client_id
         self.local_files = local_files or []
         self.tree_files = tree_files or []
+        self.compare_document_ids_a = compare_document_ids_a or []
+        self.compare_document_ids_b = compare_document_ids_b or []
         self._stop_requested = False
         self._received_tokens = False
     
@@ -118,13 +122,17 @@ class StreamWorker(QThread):
                     self.error_occurred.emit(f"Ошибка загрузки файла: {e}")
             
             doc_ids = [UUID(did) for did in self.document_ids] if self.document_ids else None
+            compare_a = [UUID(did) for did in self.compare_document_ids_a] if self.compare_document_ids_a else None
+            compare_b = [UUID(did) for did in self.compare_document_ids_b] if self.compare_document_ids_b else None
             for event in self.client.send_message(
                 chat_uuid,
                 self.message,
                 attached_document_ids=doc_ids,
                 client_id=self.client_id,
                 google_files=google_files if google_files else None,
-                tree_files=self.tree_files if self.tree_files else None
+                tree_files=self.tree_files if self.tree_files else None,
+                compare_document_ids_a=compare_a,
+                compare_document_ids_b=compare_b
             ):
                 if self._stop_requested:
                     break
@@ -499,7 +507,11 @@ class ChatWidget(QWidget):
         self.attach_from_tree_btn.setToolTip("Прикрепить выбранные документы из дерева проектов")
         self.attach_from_tree_btn.clicked.connect(self._attach_from_tree)
         btn_row.addWidget(self.attach_from_tree_btn)
-        
+
+        self.compare_mode_cb = QCheckBox("🔄 Сравнение")
+        self.compare_mode_cb.setToolTip("Режим сравнения двух документов (DOC_A vs DOC_B)")
+        btn_row.addWidget(self.compare_mode_cb)
+
         btn_row.addStretch()
         input_container.addLayout(btn_row)
         
@@ -709,6 +721,23 @@ class ChatWidget(QWidget):
                     document_ids.append(doc_id)
             client_id = ctx.get("client_id")
 
+        # Проверка режима сравнения
+        compare_a = None
+        compare_b = None
+        if self.compare_mode_cb.isChecked():
+            if len(document_ids) != 2:
+                QMessageBox.warning(
+                    self,
+                    "Режим сравнения",
+                    "Для сравнения нужно прикрепить ровно 2 документа.\n"
+                    f"Сейчас прикреплено: {len(document_ids)}"
+                )
+                self.send_btn.setEnabled(True)
+                return
+            compare_a = [document_ids[0]]
+            compare_b = [document_ids[1]]
+            document_ids = []  # Очищаем, т.к. передаём через compare_*
+
         self.worker = StreamWorker(
             self.client,
             self.current_chat_id,
@@ -716,7 +745,9 @@ class ChatWidget(QWidget):
             document_ids=document_ids,
             client_id=client_id,
             local_files=local_files,
-            tree_files=tree_files
+            tree_files=tree_files,
+            compare_document_ids_a=compare_a,
+            compare_document_ids_b=compare_b
         )
         self.worker.token_received.connect(self._on_token)
         self.worker.phase_started.connect(self._on_phase)

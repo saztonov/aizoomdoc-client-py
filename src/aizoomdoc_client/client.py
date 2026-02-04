@@ -308,7 +308,9 @@ class AIZoomDocClient:
         attached_document_ids: Optional[List[UUID]] = None,
         client_id: Optional[str] = None,
         google_files: Optional[List[dict]] = None,
-        tree_files: Optional[List[dict]] = None
+        tree_files: Optional[List[dict]] = None,
+        compare_document_ids_a: Optional[List[UUID]] = None,
+        compare_document_ids_b: Optional[List[UUID]] = None
     ) -> Iterator[StreamEvent]:
         """
         Отправить сообщение в чат со стримингом ответа.
@@ -321,6 +323,8 @@ class AIZoomDocClient:
             client_id: ID клиента
             google_files: Файлы из Google File API [{uri, mime_type}]
             tree_files: Файлы MD/HTML из дерева [{r2_key, file_type}]
+            compare_document_ids_a: ID документов для группы A (режим сравнения)
+            compare_document_ids_b: ID документов для группы B (режим сравнения)
 
         Yields:
             События стриминга (фазы, токены LLM, ошибки)
@@ -359,6 +363,10 @@ class AIZoomDocClient:
         if tree_files:
             import json
             params["tree_files"] = json.dumps(tree_files)
+        if compare_document_ids_a:
+            params["compare_document_ids_a"] = [str(did) for did in compare_document_ids_a]
+        if compare_document_ids_b:
+            params["compare_document_ids_b"] = [str(did) for did in compare_document_ids_b]
 
         yield from self._http.stream_sse(
             f"/chats/{chat_id}/stream",
