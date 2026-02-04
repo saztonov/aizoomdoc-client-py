@@ -761,8 +761,10 @@ class ChatWidget(QWidget):
         self.worker.image_ready.connect(self._on_image_ready)
 
         # Логируем запрос пользователя перед стартом
+        print(f"[LOG] _start_streaming: current_chat_id = {self.current_chat_id}", flush=True)
         try:
             config = get_config_manager()
+            print(f"[LOG] _start_streaming: calling log_sse_event for user_request", flush=True)
             config.log_sse_event(self.current_chat_id, "user_request", {
                 "message": message,
                 "document_ids": document_ids,
@@ -771,7 +773,9 @@ class ChatWidget(QWidget):
                 "compare_document_ids_a": compare_a,
                 "compare_document_ids_b": compare_b
             })
+            print(f"[LOG] _start_streaming: user_request logged OK", flush=True)
         except Exception as e:
+            print(f"[LOG] _start_streaming ERROR: {e}", flush=True)
             logger.error(f"Error logging user request: {e}")
 
         self.worker.start()
@@ -983,30 +987,38 @@ class ChatWidget(QWidget):
     
     def _on_sse_event(self, event_type: str, data: dict):
         """Обработка SSE-событий с логированием в локальный файл."""
-        if self.current_chat_id:
-            try:
-                config = get_config_manager()
+        # Отладка: всегда выводим информацию о событии
+        print(f"[LOG] _on_sse_event: type={event_type}, chat_id={self.current_chat_id}", flush=True)
 
-                # ПЕРЕД логированием tool_call - сохраняем накопленный ответ как промежуточный
-                # Это важно делать здесь, а не в _on_tool_call, чтобы порядок в логе был правильный:
-                # 1. Промежуточный ответ LLM
-                # 2. Tool call
-                if event_type == "tool_call":
-                    accumulated_len = len(self._accumulated_response)
-                    accumulated_preview = self._accumulated_response[:100] if self._accumulated_response else "(пусто)"
-                    print(f"[DEBUG] tool_call received, _accumulated_response length: {accumulated_len}", flush=True)
-                    print(f"[DEBUG] _accumulated_response preview: {accumulated_preview}", flush=True)
+        if not self.current_chat_id:
+            print(f"[LOG] _on_sse_event: SKIP - chat_id is None!", flush=True)
+            return
 
-                    if self._accumulated_response.strip():
-                        print(f"[DEBUG] Logging llm_intermediate with {accumulated_len} chars", flush=True)
-                        config.log_sse_event(self.current_chat_id, "llm_intermediate", {
-                            "content": self._accumulated_response
-                        })
-                        self._accumulated_response = ""  # Очищаем после логирования
+        try:
+            config = get_config_manager()
 
-                config.log_sse_event(self.current_chat_id, event_type, data)
-            except Exception as e:
-                logger.error(f"Error logging SSE event: {e}")
+            # ПЕРЕД логированием tool_call - сохраняем накопленный ответ как промежуточный
+            # Это важно делать здесь, а не в _on_tool_call, чтобы порядок в логе был правильный:
+            # 1. Промежуточный ответ LLM
+            # 2. Tool call
+            if event_type == "tool_call":
+                accumulated_len = len(self._accumulated_response)
+                accumulated_preview = self._accumulated_response[:100] if self._accumulated_response else "(empty)"
+                print(f"[LOG] tool_call: accumulated_len={accumulated_len}", flush=True)
+                print(f"[LOG] tool_call: preview={accumulated_preview}", flush=True)
+
+                if self._accumulated_response.strip():
+                    print(f"[LOG] Logging llm_intermediate with {accumulated_len} chars", flush=True)
+                    config.log_sse_event(self.current_chat_id, "llm_intermediate", {
+                        "content": self._accumulated_response
+                    })
+                    self._accumulated_response = ""  # Очищаем после логирования
+
+            config.log_sse_event(self.current_chat_id, event_type, data)
+            print(f"[LOG] Logged {event_type} OK", flush=True)
+        except Exception as e:
+            print(f"[LOG] ERROR in _on_sse_event: {e}", flush=True)
+            logger.error(f"Error logging SSE event: {e}")
     
     def _on_tool_call(self, tool: str, reason: str, params: dict):
         """Обработка запроса инструмента от LLM (request_images, zoom)."""
