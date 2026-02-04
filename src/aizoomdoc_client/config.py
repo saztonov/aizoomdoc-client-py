@@ -478,8 +478,11 @@ class ConfigManager:
             data: Данные события
         """
         try:
+            print(f"[CONFIG] log_sse_event: chat_id={chat_id}, event_type={event_type}", flush=True)
             chat_dir = self.get_chat_dir(chat_id)
             log_file = chat_dir / "dialog.log"
+            print(f"[CONFIG] log_file path: {log_file}", flush=True)
+            print(f"[CONFIG] chat_dir exists: {chat_dir.exists()}", flush=True)
 
             timestamp = datetime.now().strftime("%H:%M:%S")
 
@@ -488,6 +491,7 @@ class ConfigManager:
             THIN_LINE = "-" * 80
 
             with open(log_file, "a", encoding="utf-8") as f:
+                print(f"[CONFIG] File opened successfully", flush=True)
 
                 if event_type == "user_request":
                     # Заголовок нового запроса пользователя
