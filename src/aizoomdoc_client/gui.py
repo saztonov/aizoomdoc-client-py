@@ -28,11 +28,11 @@ from PyQt6.QtWidgets import (
     QDoubleSpinBox, QSpinBox, QFormLayout, QCheckBox, QStyle
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QSize, QTimer, QUrl, QByteArray
-from PyQt6.QtGui import QFont, QAction, QTextCursor, QIcon, QColor, QPixmap, QImage
+from PyQt6.QtGui import QFont, QAction, QActionGroup, QTextCursor, QIcon, QColor, QPixmap, QImage
 from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkRequest, QNetworkReply
 
 from aizoomdoc_client.client import AIZoomDocClient
-from aizoomdoc_client.config import get_config_manager
+from aizoomdoc_client.config import get_config_manager, KNOWN_SERVERS
 from aizoomdoc_client.models import (
     ChatResponse, MessageResponse, StreamEvent, 
     UserMeResponse, PromptUserRole
@@ -1633,7 +1633,27 @@ class MainWindow(QMainWindow):
         folder_action = QAction("Выбор папки для данных...", self)
         folder_action.triggered.connect(self._choose_data_folder)
         settings_menu.addAction(folder_action)
-        
+
+        settings_menu.addSeparator()
+
+        # Подменю выбора сервера
+        server_menu = settings_menu.addMenu("Сервер")
+        self.server_action_group = QActionGroup(self)
+        self.server_action_group.setExclusive(True)
+
+        server_labels = {
+            "production": "Production (osa.fvds.ru)",
+            "local": "Локальный (localhost:8000)"
+        }
+
+        for name, url in KNOWN_SERVERS.items():
+            label = server_labels.get(name, name)
+            action = QAction(label, self, checkable=True)
+            action.setData(url)
+            action.triggered.connect(lambda checked, u=url: self._switch_server(u))
+            self.server_action_group.addAction(action)
+            server_menu.addAction(action)
+
         help_menu = menubar.addMenu("Справка")
         about_action = QAction("О программе", self)
         about_action.triggered.connect(self._show_about)
@@ -1670,9 +1690,36 @@ class MainWindow(QMainWindow):
     
     def _setup_statusbar(self):
         self.statusBar().showMessage("Не авторизован")
+
+        # Индикатор сервера
+        self.server_label = QLabel()
+        self.statusBar().addPermanentWidget(self.server_label)
+
         self.user_label = QLabel("")
         self.statusBar().addPermanentWidget(self.user_label)
-    
+
+        self._update_server_indicator()
+
+    def _update_server_indicator(self):
+        """Обновить индикатор текущего сервера в статусбаре."""
+        config = get_config_manager()
+        url = config.get_config().server_url
+
+        if "localhost" in url or "127.0.0.1" in url:
+            self.server_label.setText("DEV")
+            self.server_label.setStyleSheet("color: orange; font-weight: bold; padding: 0 5px;")
+        else:
+            self.server_label.setText("PROD")
+            self.server_label.setStyleSheet("color: green; padding: 0 5px;")
+
+    def _update_server_menu(self):
+        """Обновить галочку в меню сервера."""
+        config = get_config_manager()
+        current_url = config.get_config().server_url
+
+        for action in self.server_action_group.actions():
+            action.setChecked(action.data() == current_url)
+
     def _try_auto_login(self):
         config = get_config_manager()
         
@@ -1766,9 +1813,13 @@ class MainWindow(QMainWindow):
         
         # Загрузить текущий режим модели в селектор
         self.chat_widget.load_model_setting()
-        
+
         self.left_panel.load_chats()
-    
+
+        # Обновить индикатор сервера и меню
+        self._update_server_indicator()
+        self._update_server_menu()
+
     def _logout(self):
         if self.client:
             self.client.logout()
@@ -1786,7 +1837,38 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("Не авторизован")
         self.user_label.setText("")
         self._show_login()
-    
+
+    def _switch_server(self, new_url: str):
+        """Переключить на другой сервер."""
+        config = get_config_manager()
+        current_url = config.get_config().server_url
+
+        if new_url == current_url:
+            return
+
+        # Выходим с текущего сервера
+        if self.client:
+            self.client.logout()
+            self.client = None
+
+        # Устанавливаем новый URL
+        config.set_server_url(new_url)
+
+        # Очищаем UI
+        self.left_panel.chat_list.clear()
+        self.left_panel.tree_widget.clear()
+        self.chat_widget.messages_area.clear()
+        self.chat_widget.current_chat_id = None
+
+        self.statusBar().showMessage("Переключение сервера...")
+        self.user_label.setText("")
+
+        # Обновляем индикатор сервера
+        self._update_server_indicator()
+
+        # Пробуем автологин на новый сервер
+        self._try_auto_login()
+
     def _show_settings(self):
         if not self.client:
             QMessageBox.warning(self, "Ошибка", "Сначала авторизуйтесь")

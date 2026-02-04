@@ -24,6 +24,12 @@ logger = logging.getLogger(__name__)
 # при первом запуске exe-клиента без необходимости ручной настройки
 DEFAULT_SERVER_URL = "https://osa.fvds.ru"
 DEFAULT_STATIC_TOKEN = "dev-static-token-default-user"
+
+# Известные серверы для быстрого переключения
+KNOWN_SERVERS = {
+    "production": "https://osa.fvds.ru",
+    "local": "http://localhost:8000"
+}
 # =============================================================================
 
 
