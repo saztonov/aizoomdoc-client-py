@@ -986,23 +986,32 @@ class ChatWidget(QWidget):
         if self.current_chat_id:
             try:
                 config = get_config_manager()
+
+                # ПЕРЕД логированием tool_call - сохраняем накопленный ответ как промежуточный
+                # Это важно делать здесь, а не в _on_tool_call, чтобы порядок в логе был правильный:
+                # 1. Промежуточный ответ LLM
+                # 2. Tool call
+                if event_type == "tool_call":
+                    accumulated_len = len(self._accumulated_response)
+                    accumulated_preview = self._accumulated_response[:100] if self._accumulated_response else "(пусто)"
+                    print(f"[DEBUG] tool_call received, _accumulated_response length: {accumulated_len}", flush=True)
+                    print(f"[DEBUG] _accumulated_response preview: {accumulated_preview}", flush=True)
+
+                    if self._accumulated_response.strip():
+                        print(f"[DEBUG] Logging llm_intermediate with {accumulated_len} chars", flush=True)
+                        config.log_sse_event(self.current_chat_id, "llm_intermediate", {
+                            "content": self._accumulated_response
+                        })
+                        self._accumulated_response = ""  # Очищаем после логирования
+
                 config.log_sse_event(self.current_chat_id, event_type, data)
             except Exception as e:
                 logger.error(f"Error logging SSE event: {e}")
     
     def _on_tool_call(self, tool: str, reason: str, params: dict):
         """Обработка запроса инструмента от LLM (request_images, zoom)."""
-        # Логируем накопленный ответ LLM перед tool_call (промежуточный ответ)
-        if self.current_chat_id and self._accumulated_response.strip():
-            try:
-                config = get_config_manager()
-                config.log_sse_event(self.current_chat_id, "llm_intermediate", {
-                    "content": self._accumulated_response
-                })
-                self._accumulated_response = ""  # Очищаем после логирования
-            except Exception as e:
-                logger.error(f"Error logging intermediate response: {e}")
-
+        # Примечание: логирование промежуточного ответа LLM выполняется в _on_sse_event
+        # перед логированием tool_call, чтобы порядок в логе был правильным
         self._start_progress_indicator()
 
         # Отображаем в статусе
