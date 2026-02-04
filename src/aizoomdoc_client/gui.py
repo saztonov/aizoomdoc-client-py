@@ -199,29 +199,28 @@ class LoginDialog(QDialog):
         
         config = get_config_manager()
         saved_creds = config.load_static_token()
-        
+        current_server = config.get_config().server_url
+
         # Server
         server_group = QGroupBox("Сервер")
         server_layout = QVBoxLayout(server_group)
         self.server_edit = QLineEdit()
         self.server_edit.setPlaceholderText("http://localhost:8000")
-        # Используем сохранённый URL или из конфига
-        if saved_creds and saved_creds.get("server_url"):
-            self.server_edit.setText(saved_creds["server_url"])
-        else:
-            self.server_edit.setText(config.get_config().server_url)
+        # Всегда используем текущий URL из конфига (важно для переключения серверов)
+        self.server_edit.setText(current_server)
         server_layout.addWidget(self.server_edit)
         layout.addWidget(server_group)
-        
+
         # Token
         token_group = QGroupBox("Статичный токен")
         token_layout = QHBoxLayout(token_group)
         self.token_edit = QLineEdit()
         self.token_edit.setPlaceholderText("Введите ваш статичный токен")
         self.token_edit.setEchoMode(QLineEdit.EchoMode.Password)
-        # Предзаполняем сохранённый токен
-        if saved_creds and saved_creds.get("static_token"):
-            self.token_edit.setText(saved_creds["static_token"])
+        # Предзаполняем токен только если сохранённый URL совпадает с текущим
+        if saved_creds and saved_creds.get("server_url") == current_server:
+            if saved_creds.get("static_token"):
+                self.token_edit.setText(saved_creds["static_token"])
         token_layout.addWidget(self.token_edit)
         
         self.show_token_btn = QPushButton("👁")
@@ -1846,7 +1845,7 @@ class MainWindow(QMainWindow):
         if new_url == current_url:
             return
 
-        # Выходим с текущего сервера
+        # Выходим с текущего сервера (но НЕ очищаем токен - он для старого сервера)
         if self.client:
             self.client.logout()
             self.client = None
@@ -1865,9 +1864,10 @@ class MainWindow(QMainWindow):
 
         # Обновляем индикатор сервера
         self._update_server_indicator()
+        self._update_server_menu()
 
-        # Пробуем автологин на новый сервер
-        self._try_auto_login()
+        # Показываем диалог авторизации для нового сервера
+        self._show_login()
 
     def _show_settings(self):
         if not self.client:
