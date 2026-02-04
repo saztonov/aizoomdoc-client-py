@@ -992,6 +992,17 @@ class ChatWidget(QWidget):
     
     def _on_tool_call(self, tool: str, reason: str, params: dict):
         """Обработка запроса инструмента от LLM (request_images, zoom)."""
+        # Логируем накопленный ответ LLM перед tool_call (промежуточный ответ)
+        if self.current_chat_id and self._accumulated_response.strip():
+            try:
+                config = get_config_manager()
+                config.log_sse_event(self.current_chat_id, "llm_intermediate", {
+                    "content": self._accumulated_response
+                })
+                self._accumulated_response = ""  # Очищаем после логирования
+            except Exception as e:
+                logger.error(f"Error logging intermediate response: {e}")
+
         self._start_progress_indicator()
 
         # Отображаем в статусе

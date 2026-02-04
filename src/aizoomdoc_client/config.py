@@ -600,7 +600,16 @@ class ConfigManager:
                     content = data.get("content", "")
                     if content:
                         f.write(f"\n{THIN_LINE}\n")
-                        f.write(f"[{timestamp}] OTVET LLM\n")
+                        f.write(f"[{timestamp}] OTVET LLM (FINAL)\n")
+                        f.write(f"{THIN_LINE}\n")
+                        f.write(f"{content}\n")
+
+                elif event_type == "llm_intermediate":
+                    # Промежуточный ответ LLM (перед запросом изображений)
+                    content = data.get("content", "")
+                    if content:
+                        f.write(f"\n{THIN_LINE}\n")
+                        f.write(f"[{timestamp}] OTVET LLM (PROMEZHUTOCHNYJ)\n")
                         f.write(f"{THIN_LINE}\n")
                         f.write(f"{content}\n")
 
