@@ -760,8 +760,21 @@ class ChatWidget(QWidget):
         self.worker.file_uploaded.connect(self._on_file_uploaded)
         self.worker.thinking_received.connect(self._on_thinking)
         self.worker.image_ready.connect(self._on_image_ready)
+
+        # Логируем запрос пользователя перед стартом
+        try:
+            config = get_config_manager()
+            config.log_sse_event(self.current_chat_id, "user_request", {
+                "message": message,
+                "document_ids": document_ids,
+                "local_files": local_files
+            })
+            config.save_chat_message(self.current_chat_id, "user", message)
+        except Exception as e:
+            logger.error(f"Error logging user request: {e}")
+
         self.worker.start()
-        
+
         # Clear attachments after sending
         self._clear_attachments()
     
@@ -948,6 +961,14 @@ class ChatWidget(QWidget):
         # Показываем успешное завершение в чате
         self._append_system_message("✅ Ответ получен", "success")
 
+        # Логируем ответ ассистента
+        if self.current_chat_id and self._accumulated_response:
+            try:
+                config = get_config_manager()
+                config.save_chat_message(self.current_chat_id, "assistant", self._accumulated_response)
+            except Exception as e:
+                logger.error(f"Error logging assistant response: {e}")
+
         self._accumulated_response = ""
         self._reset_shown_phases()
     
@@ -966,8 +987,13 @@ class ChatWidget(QWidget):
             QMessageBox.warning(self, "Ошибка", f"Не удалось сменить режим модели: {e}")
     
     def _on_sse_event(self, event_type: str, data: dict):
-        """Обработка SSE-событий (логирование отключено)."""
-        pass
+        """Обработка SSE-событий с логированием в локальный файл."""
+        if self.current_chat_id:
+            try:
+                config = get_config_manager()
+                config.log_sse_event(self.current_chat_id, event_type, data)
+            except Exception as e:
+                logger.error(f"Error logging SSE event: {e}")
     
     def _on_tool_call(self, tool: str, reason: str, params: dict):
         """Обработка запроса инструмента от LLM (request_images, zoom)."""
