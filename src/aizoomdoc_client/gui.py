@@ -766,9 +766,11 @@ class ChatWidget(QWidget):
             config.log_sse_event(self.current_chat_id, "user_request", {
                 "message": message,
                 "document_ids": document_ids,
-                "local_files": local_files
+                "local_files": local_files,
+                "tree_files": tree_files,
+                "compare_document_ids_a": compare_a,
+                "compare_document_ids_b": compare_b
             })
-            config.save_chat_message(self.current_chat_id, "user", message)
         except Exception as e:
             logger.error(f"Error logging user request: {e}")
 
@@ -960,13 +962,7 @@ class ChatWidget(QWidget):
         # Показываем успешное завершение в чате
         self._append_system_message("✅ Ответ получен", "success")
 
-        # Логируем ответ ассистента
-        if self.current_chat_id and self._accumulated_response:
-            try:
-                config = get_config_manager()
-                config.save_chat_message(self.current_chat_id, "assistant", self._accumulated_response)
-            except Exception as e:
-                logger.error(f"Error logging assistant response: {e}")
+        # Ответ LLM уже логируется через llm_final в _on_sse_event
 
         self._accumulated_response = ""
         self._reset_shown_phases()

@@ -469,10 +469,9 @@ class ConfigManager:
         data: Dict[str, Any]
     ) -> None:
         """
-        Записать SSE-событие в детальный лог.
-        
-        Логирует все события: phase_started, tool_call, llm_token, llm_final, error, completed.
-        
+        Записать SSE-событие в единый лог диалога.
+        Формат читаемый для человека.
+
         Args:
             chat_id: ID чата
             event_type: Тип события (phase_started, tool_call, etc.)
@@ -480,78 +479,160 @@ class ConfigManager:
         """
         try:
             chat_dir = self.get_chat_dir(chat_id)
-            log_file = chat_dir / "full_dialog.log"
-            
-            timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
-            
+            log_file = chat_dir / "dialog.log"
+
+            timestamp = datetime.now().strftime("%H:%M:%S")
+
+            # Разделители для читаемости
+            THICK_LINE = "=" * 80
+            THIN_LINE = "-" * 80
+
             with open(log_file, "a", encoding="utf-8") as f:
-                if event_type == "phase_started":
+
+                if event_type == "user_request":
+                    # Заголовок нового запроса пользователя
+                    message = data.get("message", "")
+                    docs = data.get("document_ids", [])
+                    files = data.get("local_files", [])
+                    tree_files = data.get("tree_files", [])
+                    google_files = data.get("google_files", [])
+                    compare_a = data.get("compare_document_ids_a", [])
+                    compare_b = data.get("compare_document_ids_b", [])
+
+                    f.write(f"\n{THICK_LINE}\n")
+                    f.write(f"[{timestamp}] ZAPROS POLZOVATELYA\n")
+                    f.write(f"{THICK_LINE}\n")
+                    f.write(f"Soobschenie:\n    {message}\n")
+
+                    if docs:
+                        f.write(f"\nPrikreplennye dokumenty:\n")
+                        for doc in docs:
+                            f.write(f"    * {doc}\n")
+
+                    if files:
+                        f.write(f"\nLokalnye fajly:\n")
+                        for file in files:
+                            f.write(f"    * {file}\n")
+
+                    if tree_files:
+                        f.write(f"\nTree-fajly:\n")
+                        for tf in tree_files:
+                            r2_key = tf.get('r2_key', '') if isinstance(tf, dict) else str(tf)
+                            file_type = tf.get('file_type', '') if isinstance(tf, dict) else ''
+                            f.write(f"    * r2_key: {r2_key} (type: {file_type})\n")
+
+                    if google_files:
+                        f.write(f"\nGoogle Files:\n")
+                        for gf in google_files:
+                            uri = gf.get('uri', '') if isinstance(gf, dict) else str(gf)
+                            mime = gf.get('mime_type', '') if isinstance(gf, dict) else ''
+                            f.write(f"    * URI: {uri}\n")
+                            if mime:
+                                f.write(f"      MIME: {mime}\n")
+
+                    if compare_a or compare_b:
+                        f.write(f"\nRezhim sravneniya:\n")
+                        f.write(f"    Dokumenty A: {compare_a}\n")
+                        f.write(f"    Dokumenty B: {compare_b}\n")
+
+                elif event_type == "file_uploaded":
+                    filename = data.get("filename", "")
+                    uri = data.get("uri", "")
+                    mime_type = data.get("mime_type", "")
+                    f.write(f"\n{THIN_LINE}\n")
+                    f.write(f"[{timestamp}] FAJL ZAGRUZHEN\n")
+                    f.write(f"{THIN_LINE}\n")
+                    f.write(f"Fajl: {filename}\n")
+                    f.write(f"URI: {uri}\n")
+                    if mime_type:
+                        f.write(f"MIME: {mime_type}\n")
+
+                elif event_type == "phase_started":
                     phase = data.get("phase", "")
                     desc = data.get("description", "")
-                    f.write(f"\n[{timestamp}] ====== PHASE: {phase} ======\n")
-                    f.write(f"  {desc}\n")
-                    
+                    f.write(f"\n{THIN_LINE}\n")
+                    f.write(f"[{timestamp}] FAZA: {phase}\n")
+                    f.write(f"{THIN_LINE}\n")
+                    if desc:
+                        f.write(f"Opisanie: {desc}\n")
+
                 elif event_type == "tool_call":
                     tool = data.get("tool", "unknown")
                     reason = data.get("reason", "")
                     params = data.get("parameters", {})
-                    f.write(f"\n[{timestamp}] >>> TOOL CALL: {tool}\n")
-                    f.write(f"  Причина: {reason}\n")
+                    f.write(f"\n{THIN_LINE}\n")
+                    f.write(f"[{timestamp}] VYZOV INSTRUMENTA: {tool}\n")
+                    f.write(f"{THIN_LINE}\n")
+                    if reason:
+                        f.write(f"Prichina: {reason}\n")
                     if params:
-                        f.write(f"  Параметры: {json.dumps(params, ensure_ascii=False, indent=4)}\n")
-                    
-                elif event_type == "llm_token":
-                    # Токены записываем компактно, без новой строки
-                    token = data.get("token", "")
-                    # Записываем только в отдельный файл токенов (накопительно в памяти)
-                    pass  # Токены накапливаются в StreamWorker и записываются в llm_final
-                    
+                        f.write(f"Parametry:\n")
+                        params_str = json.dumps(params, ensure_ascii=False, indent=4)
+                        for line in params_str.split('\n'):
+                            f.write(f"    {line}\n")
+
+                elif event_type == "image_ready":
+                    block_id = data.get("block_id", "")
+                    kind = data.get("kind", "")
+                    url = data.get("url") or data.get("public_url", "")
+                    reason = data.get("reason", "")
+                    bbox = data.get("bbox_norm") or data.get("bbox", [])
+                    f.write(f"\n{THIN_LINE}\n")
+                    f.write(f"[{timestamp}] IZOBRAZHENIE GOTOVO\n")
+                    f.write(f"{THIN_LINE}\n")
+                    f.write(f"Block ID: {block_id}\n")
+                    f.write(f"Tip: {kind}\n")
+                    f.write(f"URL: {url}\n")
+                    if reason:
+                        f.write(f"Prichina: {reason}\n")
+                    if bbox:
+                        f.write(f"BBox: {bbox}\n")
+
+                elif event_type == "thinking" or event_type == "llm_thinking":
+                    content = data.get("content", "")
+                    if content:
+                        f.write(f"\n{THIN_LINE}\n")
+                        f.write(f"[{timestamp}] RAZMYSHLENIYA LLM\n")
+                        f.write(f"{THIN_LINE}\n")
+                        f.write(f"{content}\n")
+
                 elif event_type == "llm_final":
                     content = data.get("content", "")
                     if content:
-                        f.write(f"\n[{timestamp}] <<< LLM FINAL RESPONSE\n")
-                        f.write(f"{'-'*40}\n")
-                        f.write(content)
-                        f.write(f"\n{'-'*40}\n")
-                    
-                elif event_type == "thinking":
-                    # Размышления модели (если поддерживается)
-                    content = data.get("content", "")
-                    if content:
-                        f.write(f"\n[{timestamp}] 💭 THINKING\n")
+                        f.write(f"\n{THIN_LINE}\n")
+                        f.write(f"[{timestamp}] OTVET LLM\n")
+                        f.write(f"{THIN_LINE}\n")
                         f.write(f"{content}\n")
-                    
+
+                elif event_type == "llm_token":
+                    # Токены пропускаем - финальный ответ записывается в llm_final
+                    pass
+
                 elif event_type == "error":
                     message = data.get("message", "")
-                    f.write(f"\n[{timestamp}] ❌ ERROR: {message}\n")
-                    
+                    f.write(f"\n{THIN_LINE}\n")
+                    f.write(f"[{timestamp}] OSHIBKA\n")
+                    f.write(f"{THIN_LINE}\n")
+                    f.write(f"{message}\n")
+
                 elif event_type == "completed":
-                    f.write(f"\n[{timestamp}] ✅ COMPLETED\n")
-                    f.write(f"{'='*60}\n")
-                    
-                elif event_type == "user_request":
-                    # Запрос пользователя с контекстом
-                    message = data.get("message", "")
-                    docs = data.get("document_ids", [])
-                    files = data.get("local_files", [])
-                    f.write(f"\n[{timestamp}] 👤 USER REQUEST\n")
-                    f.write(f"{'='*60}\n")
-                    f.write(f"Сообщение: {message}\n")
-                    if docs:
-                        f.write(f"Документы: {docs}\n")
-                    if files:
-                        f.write(f"Локальные файлы: {files}\n")
-                    
-                elif event_type == "file_uploaded":
-                    filename = data.get("filename", "")
-                    uri = data.get("uri", "")
-                    f.write(f"\n[{timestamp}] 📎 FILE UPLOADED: {filename}\n")
-                    f.write(f"  URI: {uri}\n")
-                    
+                    f.write(f"\n{THICK_LINE}\n")
+                    f.write(f"[{timestamp}] ZAVERSHENO\n")
+                    f.write(f"{THICK_LINE}\n\n")
+
+                elif event_type == "queue_position":
+                    position = data.get("position", 0)
+                    f.write(f"\n[{timestamp}] Poziciya v ocheredi: {position}\n")
+
+                elif event_type == "processing_started":
+                    f.write(f"\n[{timestamp}] Obrabotka nachalas\n")
+
                 else:
-                    # Прочие события
-                    f.write(f"\n[{timestamp}] [{event_type}] {json.dumps(data, ensure_ascii=False)}\n")
-                    
+                    # Прочие события - записываем как JSON
+                    f.write(f"\n[{timestamp}] [{event_type}]\n")
+                    f.write(json.dumps(data, ensure_ascii=False, indent=4))
+                    f.write("\n")
+
         except Exception as e:
             logger.error(f"Error logging SSE event: {e}")
     
