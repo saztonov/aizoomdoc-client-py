@@ -590,14 +590,15 @@ class ChatWidget(QWidget):
             return
 
         if role == "user":
-            # Запрос пользователя — сворачиваемый блок
+            # Запрос пользователя — сворачиваемый блок, сдвинутый вправо
             preview = content[:80].replace("\n", " ").strip()
             if len(content) > 80:
                 preview += "..."
             section = CollapsibleSection(
                 f"\U0001f464 {preview}",
-                initially_expanded=True
+                initially_expanded=False
             )
+            section.setContentsMargins(200, 0, 0, 0)
             msg_label = QLabel(content)
             msg_label.setWordWrap(True)
             msg_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
