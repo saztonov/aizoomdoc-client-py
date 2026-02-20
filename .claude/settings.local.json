@@ -6,7 +6,8 @@
       "Bash(python:*)",
       "Bash(set PYTHONPATH=src:*)",
       "Bash(PYTHONIOENCODING=utf-8 python -X utf8 -c:*)",
-      "Bash(PYTHONIOENCODING=utf-8 python:*)"
+      "Bash(PYTHONIOENCODING=utf-8 python:*)",
+      "Bash(pip install:*)"
     ]
   }
 }

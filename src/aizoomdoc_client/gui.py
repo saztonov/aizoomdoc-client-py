@@ -41,6 +41,10 @@ from aizoomdoc_client.exceptions import (
     AIZoomDocError, AuthenticationError, TokenExpiredError
 )
 from aizoomdoc_client.markdown_formatter import format_message
+from aizoomdoc_client.chat_widgets import (
+    CollapsibleSection, MessageBubbleWidget, StreamingBubbleWidget,
+    SystemMessageWidget, ToolCallWidget, ImageWidget, ImageErrorWidget
+)
 
 logger = logging.getLogger(__name__)
 
@@ -439,11 +443,30 @@ class ChatWidget(QWidget):
         top_bar.addStretch()
         layout.addLayout(top_bar)
         
-        # Messages area
-        self.messages_area = QTextBrowser()
-        self.messages_area.setOpenExternalLinks(True)
-        self.messages_area.setFont(QFont("Segoe UI", 11))
-        layout.addWidget(self.messages_area, 1)
+        # Messages area (QScrollArea + виджеты вместо QTextBrowser)
+        self.messages_scroll = QScrollArea()
+        self.messages_scroll.setWidgetResizable(True)
+        self.messages_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.messages_scroll.setStyleSheet("""
+            QScrollArea { border: none; background: #fafafa; }
+            QScrollBar:vertical { width: 8px; background: transparent; }
+            QScrollBar::handle:vertical {
+                background: #ccc; border-radius: 4px; min-height: 20px;
+            }
+        """)
+        self.messages_container = QWidget()
+        self.messages_layout = QVBoxLayout(self.messages_container)
+        self.messages_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        self.messages_layout.setContentsMargins(5, 5, 5, 5)
+        self.messages_layout.setSpacing(2)
+        self.messages_layout.addStretch()
+        self.messages_scroll.setWidget(self.messages_container)
+        layout.addWidget(self.messages_scroll, 1)
+
+        # Трекинг текущих секций для стриминга
+        self._current_steps_section: Optional[CollapsibleSection] = None
+        self._current_images_section: Optional[CollapsibleSection] = None
+        self._current_streaming_bubble: Optional[StreamingBubbleWidget] = None
         
         # Status bar with progress indicator
         status_layout = QHBoxLayout()
@@ -539,7 +562,7 @@ class ChatWidget(QWidget):
     def clear_for_new_chat(self):
         """Очистить виджет для нового чата (без записи в БД)."""
         self.current_chat_id = None
-        self.messages_area.clear()
+        self.clear_messages()
         self.input_edit.clear()
         self.status_label.setText("")
         self._clear_attachments()
@@ -547,12 +570,12 @@ class ChatWidget(QWidget):
     def _load_history(self):
         if not self.current_chat_id or not self.client:
             return
-        
+
         try:
             from uuid import UUID
             history = self.client.get_chat_history(UUID(self.current_chat_id))
-            
-            self.messages_area.clear()
+
+            self.clear_messages()
             for msg in history.messages:
                 content = fix_mojibake(msg.content)
                 images = getattr(msg, 'images', [])
@@ -561,83 +584,34 @@ class ChatWidget(QWidget):
             logger.error(f"Error loading history: {e}")
     
     def _append_message(self, role: str, content: str, images: list = None, model_name: str = None):
-        cursor = self.messages_area.textCursor()
-        cursor.movePosition(QTextCursor.MoveOperation.End)
-        
-        if role == "user":
-            # Сообщение пользователя — справа, серый фон, скруглённые углы
-            html = f'''
-            <table width="100%" cellpadding="0" cellspacing="0" style="margin: 10px 0;">
-                <tr>
-                    <td width="20%"></td>
-                    <td width="80%" align="right">
-                        <div style="background: #e0e0e0; color: #333; 
-                                    padding: 12px 16px; 
-                                    border-radius: 18px 18px 4px 18px; 
-                                    text-align: right;">
-                            <div style="font-size: 9px; color: #666; font-weight: bold; margin-bottom: 6px;">Пользователь</div>
-                            <div style="white-space: pre-wrap;">{content}</div>
-                        </div>
-                    </td>
-                </tr>
-            </table>
-            '''
-        elif role == "assistant":
-            # Сообщение LLM — слева, белый фон с рамкой, скруглённые углы
-            formatted = format_message(content)
-            # Определяем название модели
-            llm_label = model_name if model_name else self._get_current_model_label()
-            html = f'''
-            <table width="100%" cellpadding="0" cellspacing="0" style="margin: 10px 0;">
-                <tr>
-                    <td width="80%" align="left">
-                        <div style="background: #ffffff; color: #333; 
-                                    padding: 12px 16px; 
-                                    border-radius: 18px 18px 18px 4px; 
-                                    border: 1px solid #e0e0e0; text-align: left;">
-                            <div style="font-size: 9px; color: #009933; font-weight: bold; margin-bottom: 6px;">{llm_label}</div>
-                            <div>{formatted}</div>
-                        </div>
-                    </td>
-                    <td width="20%"></td>
-                </tr>
-            </table>
-            '''
-        else:
-            html = f'<p style="color: #666; text-align: center; font-style: italic;">{content}</p>'
-        
-        # Добавляем изображения
+        if role == "system":
+            widget = SystemMessageWidget(content, "info")
+            self._add_to_messages(widget)
+            return
+
+        llm_label = model_name if model_name else self._get_current_model_label()
+        bubble = MessageBubbleWidget(role, content, model_name=llm_label)
+        self._add_to_messages(bubble)
+
+        # Изображения из истории — в свёрнутую секцию
         if images:
-            html += '<div style="margin: 10px 20px;">'
+            loaded_any = False
+            section = CollapsibleSection("\U0001f4f7 Изображения", initially_expanded=False)
             for img in images:
                 url = getattr(img, 'url', None) or (img.get('url') if isinstance(img, dict) else None)
-                if url:
-                    img_type = getattr(img, 'image_type', '') or (img.get('image_type', '') if isinstance(img, dict) else '')
-                    # Загружаем изображение и конвертируем в base64
-                    try:
-                        import httpx
-                        import base64
-                        response = httpx.get(url, timeout=10.0)
-                        if response.status_code == 200:
-                            content_type = response.headers.get('content-type', '')
-                            if content_type.startswith('image/'):
-                                img_bytes = response.content
-                                img_data = base64.b64encode(img_bytes).decode('utf-8')
-                                data_url = f"data:{content_type};base64,{img_data}"
-                                html += f'<p><a href="{url}"><img src="{data_url}" width="400" style="max-width: 100%; border: 1px solid #ccc; margin: 5px 0;"/></a>'
-                                html += f'<br/><small style="color: #666;">{img_type}</small></p>'
-                            else:
-                                html += f'<p><a href="{url}">[Файл: {img_type}]</a></p>'
-                        else:
-                            html += f'<p><a href="{url}">[Файл: {img_type}]</a></p>'
-                    except Exception as e:
-                        logger.error(f"Error loading image: {e}")
-                        html += f'<p><a href="{url}">[Файл: {img_type}]</a></p>'
-            html += '</div>'
-        
-        cursor.insertHtml(html)
-        self.messages_area.setTextCursor(cursor)
-        self.messages_area.ensureCursorVisible()
+                if not url:
+                    continue
+                img_type = getattr(img, 'image_type', '') or (img.get('image_type', '') if isinstance(img, dict) else '')
+                pixmap = self._download_pixmap(url)
+                if pixmap and not pixmap.isNull():
+                    iw = ImageWidget(img_type or "image", "history", pixmap, url)
+                    section.add_widget(iw)
+                    loaded_any = True
+                else:
+                    section.add_widget(ImageErrorWidget(img_type or "image", "Ошибка загрузки"))
+                    loaded_any = True
+            if loaded_any:
+                self._add_to_messages(section)
     
     def _send_message(self):
         message = self.input_edit.toPlainText().strip()
@@ -678,24 +652,19 @@ class ChatWidget(QWidget):
         self._reset_shown_phases()
         self._start_progress_indicator()
         
-        cursor = self.messages_area.textCursor()
-        cursor.movePosition(QTextCursor.MoveOperation.End)
-        # Сохраняем позицию ДО вставки стримингового блока (для замены на форматированный)
-        self._stream_bubble_start = cursor.position()
-        # Начало ответа LLM (слева, белый фон, скруглённые углы)
+        # Создаём сворачиваемые секции для промежуточных шагов и изображений
         llm_label = self._get_current_model_label()
-        cursor.insertHtml(f'''
-        <table width="100%" cellpadding="0" cellspacing="0" style="margin: 10px 0;">
-            <tr>
-                <td width="80%" align="left">
-                    <div style="background: #ffffff; color: #333;
-                                padding: 12px 16px;
-                                border-radius: 18px 18px 18px 4px;
-                                border: 1px solid #e0e0e0; text-align: left;">
-                        <div style="font-size: 9px; color: #009933; font-weight: bold; margin-bottom: 6px;">{llm_label}</div>
-                        <div>
-        ''')
-        self.messages_area.setTextCursor(cursor)
+
+        self._current_steps_section = CollapsibleSection("\u2699\ufe0f \u041f\u0440\u043e\u043c\u0435\u0436\u0443\u0442\u043e\u0447\u043d\u044b\u0435 \u0448\u0430\u0433\u0438", initially_expanded=True)
+        self._current_steps_section.setVisible(False)  # скрыта до первого события
+        self._add_to_messages(self._current_steps_section)
+
+        self._current_images_section = CollapsibleSection("\U0001f4f7 \u0418\u0437\u043e\u0431\u0440\u0430\u0436\u0435\u043d\u0438\u044f", initially_expanded=True)
+        self._current_images_section.setVisible(False)  # скрыта до первого изображения
+        self._add_to_messages(self._current_images_section)
+
+        self._current_streaming_bubble = StreamingBubbleWidget(model_name=llm_label)
+        self._add_to_messages(self._current_streaming_bubble)
         
         # Collect document IDs from attachments
         document_ids = []
@@ -787,13 +756,10 @@ class ChatWidget(QWidget):
         self._clear_attachments()
     
     def _on_token(self, token: str):
-        cursor = self.messages_area.textCursor()
-        cursor.movePosition(QTextCursor.MoveOperation.End)
-        cursor.insertText(token)
-        self.messages_area.setTextCursor(cursor)
-        self.messages_area.ensureCursorVisible()
-        # Накапливаем ответ для локального сохранения
+        if self._current_streaming_bubble:
+            self._current_streaming_bubble.append_token(token)
         self._accumulated_response += token
+        self._scroll_to_bottom()
     
     def _on_phase(self, phase: str, desc: str):
         """Обработка смены фазы обработки."""
@@ -821,10 +787,16 @@ class ChatWidget(QWidget):
                 phase_key = key
                 break
 
-        # Показываем в чате только если фаза ещё не была показана
+        # Показываем в секции промежуточных шагов (если фаза ещё не была показана)
         if phase_key and phase_key not in self._shown_phases:
             self._shown_phases.add(phase_key)
-            self._append_system_message(phase_messages[phase_key], "progress")
+            if self._current_steps_section:
+                widget = SystemMessageWidget(phase_messages[phase_key], "progress")
+                self._current_steps_section.add_widget(widget)
+                self._current_steps_section.setVisible(True)
+                self._scroll_to_bottom()
+            else:
+                self._append_system_message(phase_messages[phase_key], "progress")
     
     def _on_error(self, error: str):
         """Обработка ошибки."""
@@ -949,28 +921,47 @@ class ChatWidget(QWidget):
         """Обработка завершения ответа."""
         self._stop_progress_indicator()
         self.status_label.setStyleSheet(self._status_idle_style)
-        self.status_label.setText("✅ Готово")
+        self.status_label.setText("\u2705 Готово")
         self.send_btn.setEnabled(True)
 
-        # Удаляем «сырой» стриминговый блок и заменяем на форматированный
-        cursor = self.messages_area.textCursor()
-        cursor.setPosition(self._stream_bubble_start)
-        cursor.movePosition(QTextCursor.MoveOperation.End, QTextCursor.MoveMode.KeepAnchor)
-        cursor.removeSelectedText()
-        self.messages_area.setTextCursor(cursor)
+        # Заменяем стриминговый пузырь на форматированное сообщение
+        if self._current_streaming_bubble:
+            idx = self.messages_layout.indexOf(self._current_streaming_bubble)
+            self.messages_layout.removeWidget(self._current_streaming_bubble)
+            self._current_streaming_bubble.deleteLater()
+            self._current_streaming_bubble = None
 
-        # Вставляем форматированное сообщение через _append_message
-        if self._accumulated_response.strip():
-            self._append_message("assistant", self._accumulated_response,
-                                 model_name=self._get_current_model_label())
+            if self._accumulated_response.strip():
+                llm_label = self._get_current_model_label()
+                bubble = MessageBubbleWidget("assistant", self._accumulated_response, model_name=llm_label)
+                if idx >= 0:
+                    self.messages_layout.insertWidget(idx, bubble)
+                else:
+                    self._add_to_messages(bubble)
 
-        self.messages_area.ensureCursorVisible()
+        # Сворачиваем секции промежуточных шагов и изображений
+        if self._current_steps_section:
+            if self._current_steps_section.item_count > 0:
+                self._current_steps_section.set_expanded(False)
+            else:
+                self.messages_layout.removeWidget(self._current_steps_section)
+                self._current_steps_section.deleteLater()
+            self._current_steps_section = None
+
+        if self._current_images_section:
+            if self._current_images_section.item_count > 0:
+                self._current_images_section.set_expanded(False)
+            else:
+                self.messages_layout.removeWidget(self._current_images_section)
+                self._current_images_section.deleteLater()
+            self._current_images_section = None
 
         # Показываем успешное завершение в чате
-        self._append_system_message("✅ Ответ получен", "success")
+        self._append_system_message("\u2705 Ответ получен", "success")
+
+        self._scroll_to_bottom()
 
         # Ответ LLM уже логируется через llm_final в _on_sse_event
-
         self._accumulated_response = ""
         self._reset_shown_phases()
     
@@ -1032,40 +1023,18 @@ class ChatWidget(QWidget):
         # Отображаем в статусе
         self.status_label.setStyleSheet(self._status_active_style)
         if tool == "request_images":
-            self.status_label.setText(f"🖼️ Запрос изображений: {reason[:50]}...")
+            self.status_label.setText(f"\U0001f5bc\ufe0f Запрос изображений: {reason[:50]}...")
         elif tool == "zoom":
-            self.status_label.setText(f"🔍 Zoom (детализация): {reason[:50]}...")
+            self.status_label.setText(f"\U0001f50d Zoom (детализация): {reason[:50]}...")
         else:
-            self.status_label.setText(f"🔧 {tool}: {reason[:50]}...")
-        
-        # Отображаем запрос на картинки в чате
-        cursor = self.messages_area.textCursor()
-        cursor.movePosition(QTextCursor.MoveOperation.End)
-        
-        if tool == "request_images":
-            block_ids = params.get("block_ids", [])
-            html = f'''
-            <div style="margin: 5px 20px; padding: 5px; background: #e8f4fc; border-left: 3px solid #0066cc; font-size: 11px;">
-                <b>🖼️ LLM запрашивает изображения:</b><br/>
-                <span style="color: #666;">{reason}</span><br/>
-                <code>{", ".join(block_ids) if block_ids else "..."}</code>
-            </div>
-            '''
-            cursor.insertHtml(html)
-        elif tool == "zoom":
-            block_id = params.get("block_id", "")
-            bbox = params.get("bbox_norm", [])
-            html = f'''
-            <div style="margin: 5px 20px; padding: 5px; background: #fff8e8; border-left: 3px solid #ff9900; font-size: 11px;">
-                <b>🔍 LLM запрашивает детализацию:</b><br/>
-                <span style="color: #666;">{reason}</span><br/>
-                <code>{block_id}</code> → bbox: {bbox}
-            </div>
-            '''
-            cursor.insertHtml(html)
-        
-        self.messages_area.setTextCursor(cursor)
-        self.messages_area.ensureCursorVisible()
+            self.status_label.setText(f"\U0001f527 {tool}: {reason[:50]}...")
+
+        # Добавляем в секцию промежуточных шагов
+        if self._current_steps_section:
+            tc_widget = ToolCallWidget(tool, reason, params)
+            self._current_steps_section.add_widget(tc_widget)
+            self._current_steps_section.setVisible(True)
+            self._scroll_to_bottom()
     
     def _on_llm_final(self, content: str):
         """Получен финальный ответ LLM (для логирования)."""
@@ -1100,49 +1069,48 @@ class ChatWidget(QWidget):
             return
         
         # Обновляем статус
-        self.status_label.setText(f"🖼️ Получено изображение: {block_id} ({kind})")
-        
-        # Добавляем изображение в чат
-        cursor = self.messages_area.textCursor()
-        cursor.movePosition(QTextCursor.MoveOperation.End)
-        
+        self.status_label.setText(f"\U0001f5bc\ufe0f Получено изображение: {block_id} ({kind})")
+
+        # Добавляем изображение в секцию изображений
         try:
             import httpx
-            import base64
-            
+
             print(f"[DEBUG] Downloading image from {url}...", flush=True)
             response = httpx.get(url, timeout=30.0)
             print(f"[DEBUG] Response status: {response.status_code}", flush=True)
-            
+
             if response.status_code == 200:
                 content_type = response.headers.get('content-type', 'image/png')
-                img_bytes = response.content
-                print(f"[DEBUG] Image size: {len(img_bytes)} bytes", flush=True)
-                img_data = base64.b64encode(img_bytes).decode('utf-8')
-                data_url = f"data:{content_type};base64,{img_data}"
-                
-                # Вставляем изображение как отдельный блок с кликабельной ссылкой
-                html = f'<br/><a href="{url}"><img src="{data_url}" width="400" style="max-width: 100%; border: 1px solid #ccc;"/></a><br/><small style="color: #888;">📷 {block_id} ({kind})</small><br/>'
-                
-                print(f"[DEBUG] Inserting image...", flush=True)
-                cursor.insertHtml(html)
-                self.messages_area.setTextCursor(cursor)
-                self.messages_area.ensureCursorVisible()
-                print(f"[DEBUG] Image inserted successfully", flush=True)
+                if content_type.startswith('image/'):
+                    img_bytes = response.content
+                    print(f"[DEBUG] Image size: {len(img_bytes)} bytes", flush=True)
+                    pixmap = QPixmap()
+                    pixmap.loadFromData(img_bytes)
+
+                    if not pixmap.isNull() and self._current_images_section:
+                        iw = ImageWidget(block_id, kind, pixmap, url)
+                        self._current_images_section.add_widget(iw)
+                        self._current_images_section.setVisible(True)
+                        self._scroll_to_bottom()
+                        print(f"[DEBUG] Image inserted successfully", flush=True)
+                    else:
+                        print(f"[DEBUG] Pixmap is null or no images section", flush=True)
+                else:
+                    print(f"[DEBUG] Not an image content type: {content_type}", flush=True)
             else:
                 print(f"[DEBUG] Failed to download: HTTP {response.status_code}", flush=True)
-                # При ошибке показываем текст (не ссылку)
-                html = f'<br/><span style="color: #856404;">⚠️ Ошибка загрузки {block_id} (HTTP {response.status_code})</span><br/>'
-                cursor.insertHtml(html)
-                self.messages_area.setTextCursor(cursor)
-                self.messages_area.ensureCursorVisible()
-                
+                if self._current_images_section:
+                    err = ImageErrorWidget(block_id, f"HTTP {response.status_code}")
+                    self._current_images_section.add_widget(err)
+                    self._current_images_section.setVisible(True)
+
         except Exception as e:
             print(f"[DEBUG] Exception: {e}", flush=True)
             logger.error(f"Error loading image {url}: {e}")
-            html = f'<br/><span style="color: #cc0000;">❌ Ошибка: {block_id}</span><br/>'
-            cursor.insertHtml(html)
-            self.messages_area.setTextCursor(cursor)
+            if self._current_images_section:
+                err = ImageErrorWidget(block_id, str(e))
+                self._current_images_section.add_widget(err)
+                self._current_images_section.setVisible(True)
     
     def load_model_setting(self):
         """Загрузить текущий режим модели с сервера."""
@@ -1193,35 +1161,49 @@ class ChatWidget(QWidget):
     # ==================== System Messages ====================
 
     def _append_system_message(self, text: str, msg_type: str = "info"):
-        """Добавить системное сообщение в чат (стадии обработки, ошибки).
+        """Добавить системное сообщение в чат."""
+        widget = SystemMessageWidget(text, msg_type)
+        self._add_to_messages(widget)
 
-        Args:
-            text: Текст сообщения
-            msg_type: Тип сообщения (info, progress, warning, error, success)
-        """
-        colors = {
-            "info": "#6c757d",      # серый
-            "progress": "#17a2b8",   # синий
-            "warning": "#ffc107",    # жёлтый
-            "error": "#dc3545",      # красный
-            "success": "#28a745"     # зелёный
-        }
-        color = colors.get(msg_type, colors["info"])
+    # ==================== Helper Methods ====================
 
-        html = f'''
-        <table width="100%"><tr>
-            <td align="center" style="padding: 2px 0;">
-                <span style="color: {color}; font-size: 10px; font-style: italic;">
-                    {text}
-                </span>
-            </td>
-        </tr></table>
-        '''
-        cursor = self.messages_area.textCursor()
-        cursor.movePosition(QTextCursor.MoveOperation.End)
-        cursor.insertHtml(html)
-        self.messages_area.setTextCursor(cursor)
-        self.messages_area.ensureCursorVisible()
+    def _add_to_messages(self, widget: QWidget):
+        """Добавить виджет в область сообщений (перед stretch)."""
+        count = self.messages_layout.count()
+        self.messages_layout.insertWidget(count - 1, widget)
+        self._scroll_to_bottom()
+
+    def _scroll_to_bottom(self):
+        """Прокрутка к концу, если пользователь около конца."""
+        sb = self.messages_scroll.verticalScrollBar()
+        at_bottom = sb.value() >= sb.maximum() - 50
+        if at_bottom:
+            QTimer.singleShot(10, lambda: sb.setValue(sb.maximum()))
+
+    def clear_messages(self):
+        """Очистить все сообщения из области чата."""
+        self._current_steps_section = None
+        self._current_images_section = None
+        self._current_streaming_bubble = None
+        while self.messages_layout.count() > 1:  # оставляем stretch
+            item = self.messages_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+    def _download_pixmap(self, url: str) -> Optional[QPixmap]:
+        """Скачать изображение по URL и вернуть QPixmap."""
+        try:
+            import httpx
+            response = httpx.get(url, timeout=10.0)
+            if response.status_code == 200:
+                content_type = response.headers.get('content-type', '')
+                if content_type.startswith('image/'):
+                    pixmap = QPixmap()
+                    pixmap.loadFromData(response.content)
+                    return pixmap
+        except Exception as e:
+            logger.error(f"Error downloading image {url}: {e}")
+        return None
 
     def _reset_shown_phases(self):
         """Сбросить отслеживание показанных фаз (вызывать при отправке нового сообщения)."""
@@ -1861,7 +1843,7 @@ class MainWindow(QMainWindow):
         
         self.left_panel.chat_list.clear()
         self.left_panel.tree_widget.clear()
-        self.chat_widget.messages_area.clear()
+        self.chat_widget.clear_messages()
         self.chat_widget.current_chat_id = None
         
         self.statusBar().showMessage("Не авторизован")
@@ -1887,7 +1869,7 @@ class MainWindow(QMainWindow):
         # Очищаем UI
         self.left_panel.chat_list.clear()
         self.left_panel.tree_widget.clear()
-        self.chat_widget.messages_area.clear()
+        self.chat_widget.clear_messages()
         self.chat_widget.current_chat_id = None
 
         self.statusBar().showMessage("Переключение сервера...")
