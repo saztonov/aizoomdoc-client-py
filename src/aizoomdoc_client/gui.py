@@ -663,42 +663,32 @@ class ChatWidget(QWidget):
             )
             section.add_widget(msg_label)
             self._add_to_messages(section)
-            return
+        else:
+            llm_label = model_name if model_name else self._get_current_model_label()
+            bubble = MessageBubbleWidget(role, content, model_name=llm_label)
+            self._add_to_messages(bubble)
 
-        llm_label = model_name if model_name else self._get_current_model_label()
-        bubble = MessageBubbleWidget(role, content, model_name=llm_label)
-        self._add_to_messages(bubble)
-
-        # Изображения из истории — в свёрнутую секцию
+        # Изображения из истории — в свёрнутую секцию (могут быть и у user, и у assistant)
         if images:
-            print(f"[DEBUG] _append_message: {len(images)} images for assistant message", flush=True)
+            print(f"[DEBUG] _append_message: {len(images)} images for {role} message", flush=True)
             loaded_any = False
-            section = CollapsibleSection("\U0001f4f7 Изображения", initially_expanded=False)
+            img_section = CollapsibleSection("\U0001f4f7 Изображения", initially_expanded=False)
             for img in images:
                 url = getattr(img, 'url', None) or (img.get('url') if isinstance(img, dict) else None)
                 img_type = getattr(img, 'image_type', '') or (img.get('image_type', '') if isinstance(img, dict) else '')
-                print(f"[DEBUG] History image: type={img_type}, url={url}", flush=True)
                 if not url:
-                    print(f"[DEBUG] Skipping image without URL", flush=True)
                     continue
                 pixmap = self._download_pixmap(url)
                 if pixmap and not pixmap.isNull():
                     iw = ImageWidget(img_type or "image", "history", pixmap, url)
-                    section.add_widget(iw)
+                    img_section.add_widget(iw)
                     loaded_any = True
-                    print(f"[DEBUG] History image loaded OK", flush=True)
                 else:
-                    section.add_widget(ImageErrorWidget(img_type or "image", "Ошибка загрузки"))
+                    img_section.add_widget(ImageErrorWidget(img_type or "image", "Ошибка загрузки"))
                     loaded_any = True
-                    print(f"[DEBUG] History image failed to load", flush=True)
             if loaded_any:
-                self._add_to_messages(section)
-                print(f"[DEBUG] Images section added to messages ({section.item_count} items)", flush=True)
-            else:
-                print(f"[DEBUG] No images loaded from history", flush=True)
-        else:
-            if role == "assistant":
-                print(f"[DEBUG] _append_message: assistant message has NO images", flush=True)
+                self._add_to_messages(img_section)
+                print(f"[DEBUG] Images section added ({img_section.item_count} items)", flush=True)
     
     def _send_message(self):
         message = self.input_edit.toPlainText().strip()
