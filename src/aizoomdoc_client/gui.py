@@ -2001,9 +2001,12 @@ class MainWindow(QMainWindow):
 
 def run_gui():
     """Run GUI application."""
+    from aizoomdoc_client.chat_widgets import install_exception_hook
+    install_exception_hook()
+
     if sys.platform == 'win32':
         os.environ['PYTHONIOENCODING'] = 'utf-8'
-    
+
     app = QApplication(sys.argv)
     app.setApplicationName("AIZoomDoc Client")
     app.setStyle("Fusion")

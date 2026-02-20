@@ -3,7 +3,9 @@
 Виджеты чата: сворачиваемые секции, пузыри сообщений, стриминг.
 """
 
+import sys
 import logging
+import traceback
 import base64
 from typing import Optional
 
@@ -17,6 +19,19 @@ from PyQt6.QtGui import QFont, QTextCursor, QPixmap, QDesktopServices
 from aizoomdoc_client.markdown_formatter import format_message
 
 logger = logging.getLogger(__name__)
+
+
+def install_exception_hook():
+    """Устанавливает глобальный обработчик необработанных исключений для PyQt6."""
+    def _exception_hook(exc_type, exc_value, exc_tb):
+        lines = traceback.format_exception(exc_type, exc_value, exc_tb)
+        msg = "".join(lines)
+        logger.critical(f"Unhandled exception:\n{msg}")
+        print(f"\n{'='*60}\nUnhandled exception:\n{msg}{'='*60}", flush=True)
+        # Вызов дефолтного обработчика (чтобы Python мог завершить процесс)
+        sys.__excepthook__(exc_type, exc_value, exc_tb)
+
+    sys.excepthook = _exception_hook
 
 
 class CollapsibleSection(QFrame):
@@ -98,6 +113,7 @@ class MessageBubbleWidget(QFrame):
 
     def __init__(self, role: str, content: str, model_name: str = "", parent=None):
         super().__init__(parent)
+        self._adjusting = False  # Защита от рекурсии при пересчёте высоты
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 5, 0, 5)
         layout.setSpacing(0)
@@ -144,28 +160,31 @@ class MessageBubbleWidget(QFrame):
             layout.addWidget(bubble, 8)
             layout.addStretch(2)
 
-        # Автоподгонка высоты
-        bubble.document().adjustSize()
-        doc_height = bubble.document().size().height()
-        h = int(doc_height) + 30
-        if h > 2000:
-            bubble.setMaximumHeight(2000)
-            bubble.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        else:
-            bubble.setFixedHeight(h)
+        # Первоначальная подгонка высоты
+        self._apply_height()
 
-        # Пересчёт при изменении ширины (resize)
-        bubble.document().contentsChanged.connect(self._adjust_height)
-
-    def _adjust_height(self):
-        self._bubble.document().adjustSize()
+    def _apply_height(self):
+        """Вычислить и применить высоту QTextBrowser по содержимому."""
+        self._bubble.document().setTextWidth(self._bubble.viewport().width() or 400)
         doc_height = self._bubble.document().size().height()
         h = int(doc_height) + 30
         if h > 2000:
             self._bubble.setMaximumHeight(2000)
+            self._bubble.setMinimumHeight(60)
             self._bubble.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         else:
-            self._bubble.setFixedHeight(h)
+            self._bubble.setFixedHeight(max(h, 40))
+
+    def resizeEvent(self, event):
+        """Пересчитать высоту при изменении ширины виджета."""
+        super().resizeEvent(event)
+        if self._adjusting:
+            return
+        self._adjusting = True
+        try:
+            self._apply_height()
+        finally:
+            self._adjusting = False
 
 
 class StreamingBubbleWidget(QFrame):
@@ -173,6 +192,7 @@ class StreamingBubbleWidget(QFrame):
 
     def __init__(self, model_name: str = "LLM", parent=None):
         super().__init__(parent)
+        self._adjusting = False
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 5, 0, 5)
         layout.setSpacing(0)
@@ -220,14 +240,22 @@ class StreamingBubbleWidget(QFrame):
         return self._accumulated
 
     def _adjust_height(self):
-        self._text_browser.document().adjustSize()
-        doc_height = self._text_browser.document().size().height()
-        h = int(doc_height) + 30
-        if h > 2000:
-            self._text_browser.setMaximumHeight(2000)
-            self._text_browser.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        else:
-            self._text_browser.setFixedHeight(h)
+        if self._adjusting:
+            return
+        self._adjusting = True
+        try:
+            self._text_browser.document().setTextWidth(
+                self._text_browser.viewport().width() or 400
+            )
+            doc_height = self._text_browser.document().size().height()
+            h = int(doc_height) + 30
+            if h > 2000:
+                self._text_browser.setMaximumHeight(2000)
+                self._text_browser.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+            else:
+                self._text_browser.setFixedHeight(max(h, 40))
+        finally:
+            self._adjusting = False
 
 
 class SystemMessageWidget(QLabel):

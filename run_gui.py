@@ -8,6 +8,9 @@
 import sys
 sys.path.insert(0, "src")
 
+from aizoomdoc_client.chat_widgets import install_exception_hook
+install_exception_hook()
+
 from aizoomdoc_client.gui import run_gui
 
 if __name__ == "__main__":
