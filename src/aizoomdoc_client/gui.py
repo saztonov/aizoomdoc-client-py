@@ -442,7 +442,11 @@ class ChatWidget(QWidget):
         
         top_bar.addStretch()
         layout.addLayout(top_bar)
-        
+
+        # Вертикальный сплиттер: сообщения | нижняя панель (статус + ввод)
+        self.chat_splitter = QSplitter(Qt.Orientation.Vertical)
+        self.chat_splitter.setChildrenCollapsible(False)
+
         # Messages area (QScrollArea + виджеты вместо QTextBrowser)
         self.messages_scroll = QScrollArea()
         self.messages_scroll.setWidgetResizable(True)
@@ -461,13 +465,19 @@ class ChatWidget(QWidget):
         self.messages_layout.setSpacing(2)
         self.messages_layout.addStretch()
         self.messages_scroll.setWidget(self.messages_container)
-        layout.addWidget(self.messages_scroll, 1)
+        self.chat_splitter.addWidget(self.messages_scroll)
 
         # Трекинг текущих секций для стриминга
         self._current_steps_section: Optional[CollapsibleSection] = None
         self._current_images_section: Optional[CollapsibleSection] = None
         self._current_streaming_bubble: Optional[StreamingBubbleWidget] = None
-        
+
+        # --- Нижняя панель (status + attachments + input) ---
+        bottom_panel = QWidget()
+        bottom_layout = QVBoxLayout(bottom_panel)
+        bottom_layout.setContentsMargins(0, 0, 0, 0)
+        bottom_layout.setSpacing(2)
+
         # Status bar with progress indicator
         status_layout = QHBoxLayout()
         status_layout.setContentsMargins(0, 2, 0, 2)
@@ -486,45 +496,45 @@ class ChatWidget(QWidget):
         self.status_label.setStyleSheet(self._status_idle_style)
         status_layout.addWidget(self.status_label, 1)
 
-        layout.addLayout(status_layout)
+        bottom_layout.addLayout(status_layout)
 
         # Timer for progress indicator animation
         self.pulse_timer = QTimer()
         self.pulse_timer.timeout.connect(self._pulse_indicator)
-        
+
         # Attachments panel
         self.attachments_panel = QWidget()
         attachments_layout = QHBoxLayout(self.attachments_panel)
         attachments_layout.setContentsMargins(0, 5, 0, 5)
-        
+
         self.attachments_label = QLabel("Прикреплено: 0 файлов")
         self.attachments_label.setStyleSheet("color: #0066cc;")
         attachments_layout.addWidget(self.attachments_label)
-        
+
         self.attachments_list = QLabel("")
         self.attachments_list.setStyleSheet("color: #666; font-size: 10px;")
         self.attachments_list.setWordWrap(True)
         attachments_layout.addWidget(self.attachments_list, 1)
-        
+
         self.clear_attachments_btn = QPushButton("Очистить")
         self.clear_attachments_btn.setMaximumWidth(80)
         self.clear_attachments_btn.clicked.connect(self._clear_attachments)
         attachments_layout.addWidget(self.clear_attachments_btn)
-        
+
         self.attachments_panel.setVisible(False)
-        layout.addWidget(self.attachments_panel)
-        
+        bottom_layout.addWidget(self.attachments_panel)
+
         # Input area with buttons
         input_container = QVBoxLayout()
-        
+
         # Button row
         btn_row = QHBoxLayout()
-        
+
         self.attach_file_btn = QPushButton("📎 Прикрепить файл")
         self.attach_file_btn.setMaximumWidth(150)
         self.attach_file_btn.clicked.connect(self._attach_file)
         btn_row.addWidget(self.attach_file_btn)
-        
+
         self.attach_from_tree_btn = QPushButton("🌳 Из дерева")
         self.attach_from_tree_btn.setMaximumWidth(120)
         self.attach_from_tree_btn.setToolTip("Прикрепить выбранные документы из дерева проектов")
@@ -537,23 +547,55 @@ class ChatWidget(QWidget):
 
         btn_row.addStretch()
         input_container.addLayout(btn_row)
-        
+
         # Text input row
         input_layout = QHBoxLayout()
         self.input_edit = QTextEdit()
-        self.input_edit.setMaximumHeight(100)
         self.input_edit.setPlaceholderText("Введите сообщение...")
         self.input_edit.setFont(QFont("Segoe UI", 11))
+        self.input_edit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         input_layout.addWidget(self.input_edit, 1)
-        
+
         self.send_btn = QPushButton("Отправить")
         self.send_btn.setMinimumHeight(50)
         self.send_btn.setMinimumWidth(100)
         self.send_btn.clicked.connect(self._send_message)
         input_layout.addWidget(self.send_btn)
-        
+
         input_container.addLayout(input_layout)
-        layout.addLayout(input_container)
+        bottom_layout.addLayout(input_container)
+
+        # Ограничения высоты нижней панели (1–15 строк)
+        fm = self.input_edit.fontMetrics()
+        line_h = fm.lineSpacing()
+        doc_margin = int(self.input_edit.document().documentMargin())
+        frame_w = self.input_edit.frameWidth()
+        extra = 2 * doc_margin + 2 * frame_w
+        overhead = 70  # btn_row + status + spacing + margins
+
+        bottom_panel.setMinimumHeight(1 * line_h + extra + overhead)
+        bottom_panel.setMaximumHeight(15 * line_h + extra + overhead)
+
+        self.chat_splitter.addWidget(bottom_panel)
+        self.chat_splitter.setStretchFactor(0, 1)   # messages растягиваются
+        self.chat_splitter.setStretchFactor(1, 0)   # input — нет
+        self.chat_splitter.setSizes([600, 4 * line_h + extra + overhead])
+
+        # Стилизация handle сплиттера
+        self.chat_splitter.setHandleWidth(5)
+        self.chat_splitter.setStyleSheet("""
+            QSplitter::handle:vertical {
+                background: qlineargradient(x1:0,y1:0,x2:1,y2:0,
+                    stop:0 transparent, stop:0.3 #ccc, stop:0.7 #ccc, stop:1 transparent);
+                height: 5px;
+                margin: 0px 40px;
+            }
+            QSplitter::handle:vertical:hover {
+                background: qlineargradient(x1:0,y1:0,x2:1,y2:0,
+                    stop:0 transparent, stop:0.2 #999, stop:0.8 #999, stop:1 transparent);
+            }
+        """)
+        layout.addWidget(self.chat_splitter, 1)
     
     def set_chat(self, chat_id: str):
         self.current_chat_id = chat_id
