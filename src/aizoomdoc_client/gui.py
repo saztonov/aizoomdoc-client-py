@@ -659,23 +659,34 @@ class ChatWidget(QWidget):
 
         # Изображения из истории — в свёрнутую секцию
         if images:
+            print(f"[DEBUG] _append_message: {len(images)} images for assistant message", flush=True)
             loaded_any = False
             section = CollapsibleSection("\U0001f4f7 Изображения", initially_expanded=False)
             for img in images:
                 url = getattr(img, 'url', None) or (img.get('url') if isinstance(img, dict) else None)
-                if not url:
-                    continue
                 img_type = getattr(img, 'image_type', '') or (img.get('image_type', '') if isinstance(img, dict) else '')
+                print(f"[DEBUG] History image: type={img_type}, url={url}", flush=True)
+                if not url:
+                    print(f"[DEBUG] Skipping image without URL", flush=True)
+                    continue
                 pixmap = self._download_pixmap(url)
                 if pixmap and not pixmap.isNull():
                     iw = ImageWidget(img_type or "image", "history", pixmap, url)
                     section.add_widget(iw)
                     loaded_any = True
+                    print(f"[DEBUG] History image loaded OK", flush=True)
                 else:
                     section.add_widget(ImageErrorWidget(img_type or "image", "Ошибка загрузки"))
                     loaded_any = True
+                    print(f"[DEBUG] History image failed to load", flush=True)
             if loaded_any:
                 self._add_to_messages(section)
+                print(f"[DEBUG] Images section added to messages ({section.item_count} items)", flush=True)
+            else:
+                print(f"[DEBUG] No images loaded from history", flush=True)
+        else:
+            if role == "assistant":
+                print(f"[DEBUG] _append_message: assistant message has NO images", flush=True)
     
     def _send_message(self):
         message = self.input_edit.toPlainText().strip()
@@ -1005,20 +1016,30 @@ class ChatWidget(QWidget):
 
         # Сворачиваем секции промежуточных шагов и изображений
         if self._current_steps_section:
-            if self._current_steps_section.item_count > 0:
+            count = self._current_steps_section.item_count
+            print(f"[DEBUG] _on_completed: steps_section items={count}, visible={self._current_steps_section.isVisible()}", flush=True)
+            if count > 0:
                 self._current_steps_section.set_expanded(False)
             else:
                 self.messages_layout.removeWidget(self._current_steps_section)
                 self._current_steps_section.deleteLater()
             self._current_steps_section = None
+        else:
+            print(f"[DEBUG] _on_completed: no steps_section!", flush=True)
 
         if self._current_images_section:
-            if self._current_images_section.item_count > 0:
+            count = self._current_images_section.item_count
+            print(f"[DEBUG] _on_completed: images_section items={count}, visible={self._current_images_section.isVisible()}", flush=True)
+            if count > 0:
                 self._current_images_section.set_expanded(False)
+                print(f"[DEBUG] _on_completed: images_section collapsed (kept)", flush=True)
             else:
                 self.messages_layout.removeWidget(self._current_images_section)
                 self._current_images_section.deleteLater()
+                print(f"[DEBUG] _on_completed: images_section REMOVED (no items)", flush=True)
             self._current_images_section = None
+        else:
+            print(f"[DEBUG] _on_completed: no images_section!", flush=True)
 
         # Показываем успешное завершение в чате
         self._append_system_message("\u2705 Ответ получен", "success")
@@ -1157,10 +1178,19 @@ class ChatWidget(QWidget):
                         self._current_images_section.setVisible(True)
                         self._scroll_to_bottom()
                         print(f"[DEBUG] Image inserted successfully", flush=True)
+                    elif self._current_images_section:
+                        print(f"[DEBUG] Pixmap is null, adding error widget", flush=True)
+                        err = ImageErrorWidget(block_id, "Ошибка декодирования изображения")
+                        self._current_images_section.add_widget(err)
+                        self._current_images_section.setVisible(True)
                     else:
-                        print(f"[DEBUG] Pixmap is null or no images section", flush=True)
+                        print(f"[DEBUG] No images section available!", flush=True)
                 else:
                     print(f"[DEBUG] Not an image content type: {content_type}", flush=True)
+                    if self._current_images_section:
+                        err = ImageErrorWidget(block_id, f"Неожиданный тип: {content_type}")
+                        self._current_images_section.add_widget(err)
+                        self._current_images_section.setVisible(True)
             else:
                 print(f"[DEBUG] Failed to download: HTTP {response.status_code}", flush=True)
                 if self._current_images_section:
