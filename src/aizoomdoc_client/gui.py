@@ -40,6 +40,7 @@ from aizoomdoc_client.models import (
 from aizoomdoc_client.exceptions import (
     AIZoomDocError, AuthenticationError, TokenExpiredError
 )
+from aizoomdoc_client.markdown_formatter import format_message
 
 logger = logging.getLogger(__name__)
 
@@ -583,7 +584,7 @@ class ChatWidget(QWidget):
             '''
         elif role == "assistant":
             # Сообщение LLM — слева, белый фон с рамкой, скруглённые углы
-            formatted = content.replace('\n', '<br>')
+            formatted = format_message(content)
             # Определяем название модели
             llm_label = model_name if model_name else self._get_current_model_label()
             html = f'''
@@ -679,15 +680,17 @@ class ChatWidget(QWidget):
         
         cursor = self.messages_area.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.End)
+        # Сохраняем позицию ДО вставки стримингового блока (для замены на форматированный)
+        self._stream_bubble_start = cursor.position()
         # Начало ответа LLM (слева, белый фон, скруглённые углы)
         llm_label = self._get_current_model_label()
         cursor.insertHtml(f'''
         <table width="100%" cellpadding="0" cellspacing="0" style="margin: 10px 0;">
             <tr>
                 <td width="80%" align="left">
-                    <div style="background: #ffffff; color: #333; 
-                                padding: 12px 16px; 
-                                border-radius: 18px 18px 18px 4px; 
+                    <div style="background: #ffffff; color: #333;
+                                padding: 12px 16px;
+                                border-radius: 18px 18px 18px 4px;
                                 border: 1px solid #e0e0e0; text-align: left;">
                         <div style="font-size: 9px; color: #009933; font-weight: bold; margin-bottom: 6px;">{llm_label}</div>
                         <div>
@@ -949,18 +952,18 @@ class ChatWidget(QWidget):
         self.status_label.setText("✅ Готово")
         self.send_btn.setEnabled(True)
 
+        # Удаляем «сырой» стриминговый блок и заменяем на форматированный
         cursor = self.messages_area.textCursor()
-        cursor.movePosition(QTextCursor.MoveOperation.End)
-        # Закрываем блок ответа LLM
-        cursor.insertHtml('''
-                        </div>
-                    </div>
-                </td>
-                <td width="20%"></td>
-            </tr>
-        </table>
-        ''')
+        cursor.setPosition(self._stream_bubble_start)
+        cursor.movePosition(QTextCursor.MoveOperation.End, QTextCursor.MoveMode.KeepAnchor)
+        cursor.removeSelectedText()
         self.messages_area.setTextCursor(cursor)
+
+        # Вставляем форматированное сообщение через _append_message
+        if self._accumulated_response.strip():
+            self._append_message("assistant", self._accumulated_response,
+                                 model_name=self._get_current_model_label())
+
         self.messages_area.ensureCursorVisible()
 
         # Показываем успешное завершение в чате
