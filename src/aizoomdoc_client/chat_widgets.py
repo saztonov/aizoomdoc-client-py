@@ -76,12 +76,33 @@ class CollapsibleSection(QFrame):
         self._content_layout.setSpacing(2)
         main_layout.addWidget(self._content_widget)
 
+        # Кнопка «Свернуть» внизу (для длинных блоков)
+        self._collapse_btn = QPushButton("\u25b2 Свернуть")
+        self._collapse_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._collapse_btn.clicked.connect(lambda: self.set_expanded(False))
+        self._collapse_btn.setStyleSheet("""
+            QPushButton {
+                border: none;
+                background: transparent;
+                color: #888;
+                font-size: 10px;
+                padding: 2px 0;
+                font-family: 'Segoe UI', sans-serif;
+            }
+            QPushButton:hover {
+                color: #555;
+            }
+        """)
+        main_layout.addWidget(self._collapse_btn, alignment=Qt.AlignmentFlag.AlignCenter)
+
         self._content_widget.setVisible(initially_expanded)
+        self._collapse_btn.setVisible(initially_expanded)
         self._update_label()
 
     def _on_toggle(self):
         expanded = self._toggle_btn.isChecked()
         self._content_widget.setVisible(expanded)
+        self._collapse_btn.setVisible(expanded)
         self._update_label()
 
     def _update_label(self):
@@ -97,6 +118,7 @@ class CollapsibleSection(QFrame):
     def set_expanded(self, expanded: bool):
         self._toggle_btn.setChecked(expanded)
         self._content_widget.setVisible(expanded)
+        self._collapse_btn.setVisible(expanded)
         self._update_label()
 
     def set_title(self, title: str):
