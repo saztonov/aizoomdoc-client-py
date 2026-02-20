@@ -615,7 +615,17 @@ class ChatWidget(QWidget):
 
         try:
             from uuid import UUID
-            history = self.client.get_chat_history(UUID(self.current_chat_id))
+            # Получаем сырой ответ для диагностики
+            raw_response = self.client._http.get(f"/chats/{self.current_chat_id}")
+            raw_json = raw_response.json()
+            raw_messages = raw_json.get("messages", [])
+            print(f"[DEBUG] _load_history: raw API returned {len(raw_messages)} messages", flush=True)
+            for i, rm in enumerate(raw_messages):
+                raw_imgs = rm.get("images", "FIELD_MISSING")
+                print(f"[DEBUG]   msg[{i}] role={rm.get('role')}, images={raw_imgs}", flush=True)
+
+            from aizoomdoc_client.models import ChatHistoryResponse
+            history = ChatHistoryResponse(**raw_json)
 
             self.clear_messages()
             for msg in history.messages:
@@ -624,6 +634,8 @@ class ChatWidget(QWidget):
                 self._append_message(msg.role, content, images)
         except Exception as e:
             logger.error(f"Error loading history: {e}")
+            import traceback
+            traceback.print_exc()
     
     def _append_message(self, role: str, content: str, images: list = None, model_name: str = None):
         if role == "system":
