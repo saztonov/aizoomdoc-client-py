@@ -589,6 +589,27 @@ class ChatWidget(QWidget):
             self._add_to_messages(widget)
             return
 
+        if role == "user":
+            # Запрос пользователя — сворачиваемый блок
+            preview = content[:80].replace("\n", " ").strip()
+            if len(content) > 80:
+                preview += "..."
+            section = CollapsibleSection(
+                f"\U0001f464 {preview}",
+                initially_expanded=True
+            )
+            msg_label = QLabel(content)
+            msg_label.setWordWrap(True)
+            msg_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            msg_label.setStyleSheet(
+                "background: #e0e0e0; color: #333; padding: 12px 16px; "
+                "border-radius: 12px; font-size: 11px; "
+                "font-family: 'Segoe UI', sans-serif;"
+            )
+            section.add_widget(msg_label)
+            self._add_to_messages(section)
+            return
+
         llm_label = model_name if model_name else self._get_current_model_label()
         bubble = MessageBubbleWidget(role, content, model_name=llm_label)
         self._add_to_messages(bubble)
